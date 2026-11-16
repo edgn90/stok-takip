@@ -250,6 +250,15 @@ def stil_uygula():
             border-radius: 8px;
             background: rgba(128, 128, 128, 0.12);
         }
+        .cart-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border: 1px solid rgba(128, 128, 128, 0.2);
+            border-radius: 10px;
+            padding: 8px 14px;
+            margin-bottom: 6px;
+        }
         .stTabs [data-baseweb="tab-list"] {
             gap: 8px;
         }
@@ -383,6 +392,41 @@ def hareket_ekle(
     return yeni_id, kayit_zamani
 
 
+def toplu_ilce_cikis_ekle(
+    lokasyon: str,
+    kalemler: list[dict],
+    aciklama: str = "",
+) -> tuple[list[int], str]:
+    """Sepetteki birden fazla ürünü aynı tarih-saat damgasıyla tek seferde Google Sheets'e yazar."""
+    sh = get_spreadsheet()
+    ws = get_or_create_worksheet(sh, "hareketler", HAREKET_BASLIKLAR)
+    mevcut_idler = [int(x) for x in ws.col_values(1)[1:] if str(x).isdigit()]
+    baslangic_id = max(mevcut_idler, default=0) + 1
+    kayit_zamani = simdi_str()
+
+    eklenen_idler = []
+    satirlar = []
+    for idx, kalem in enumerate(kalemler):
+        kayit_id = baslangic_id + idx
+        eklenen_idler.append(kayit_id)
+        satirlar.append(
+            [
+                kayit_id,
+                kayit_zamani,
+                "ILCE_CIKIS",
+                lokasyon.strip(),
+                kalem["urun"].strip(),
+                kalem["ozellik"].strip(),
+                int(kalem["adet"]),
+                aciklama.strip(),
+            ]
+        )
+
+    ws.append_rows(satirlar, value_input_option="USER_ENTERED")
+    st.cache_data.clear()
+    return eklenen_idler, kayit_zamani
+
+
 def anlik_stok_hesapla(df_hareket: pd.DataFrame) -> pd.DataFrame:
     if df_hareket.empty:
         return pd.DataFrame(columns=["Lokasyon", "Ürün", "Özellik", "Mevcut Adet"])
@@ -465,14 +509,50 @@ def tutanak_html_olustur(veri: dict) -> str:
     tarih_saat = html.escape(str(veri.get("tarih_saat", "-")))
     islem_turu = veri.get("islem_turu", "")
     lokasyon = html.escape(str(veri.get("lokasyon", "-")))
-    urun_ham = str(veri.get("urun", "-"))
-    urun = html.escape(urun_ham)
-    ozellik = html.escape(str(veri.get("ozellik", "-")))
-    adet = html.escape(str(veri.get("adet", "-")))
     aciklama = html.escape(str(veri.get("aciklama", "")).strip() or "-")
     teslim_eden = html.escape(str(veri.get("teslim_eden", "")).strip())
     teslim_alan = html.escape(str(veri.get("teslim_alan", "")).strip())
-    urun_svg = urun_gorsel_bilgisi(urun_ham, boyut=18)["svg"]
+
+    # Tek kalem veya çoklu kalem listesini destekle
+    kalemler = veri.get("kalemler")
+    if not kalemler:
+        kalemler = [
+            {
+                "urun": veri.get("urun", "-"),
+                "ozellik": veri.get("ozellik", "-"),
+                "adet": veri.get("adet", 0),
+            }
+        ]
+
+    satirlar_html = []
+    toplam_adet = 0
+    for idx, k in enumerate(kalemler, start=1):
+        u_ham = str(k.get("urun", "-"))
+        u_esc = html.escape(u_ham)
+        oz_esc = html.escape(str(k.get("ozellik", "-")))
+        ad_int = int(k.get("adet", 0))
+        toplam_adet += ad_int
+        u_svg = urun_gorsel_bilgisi(u_ham, boyut=18)["svg"]
+        satirlar_html.append(
+            f"""
+            <tr>
+              <td>{idx}</td>
+              <td><div class="item-cell-flex">{u_svg}<strong>{u_esc}</strong></div></td>
+              <td>{oz_esc}</td>
+              <td><strong>{ad_int:,} Adet</strong></td>
+            </tr>
+            """
+        )
+
+    if len(kalemler) > 1:
+        satirlar_html.append(
+            f"""
+            <tr style="background: #f2f4f7;">
+              <td colspan="3" style="text-align: right;"><strong>GENEL TOPLAM ({len(kalemler)} Kalem):</strong></td>
+              <td><strong>{toplam_adet:,} Adet</strong></td>
+            </tr>
+            """
+        )
 
     if islem_turu == "ANA_DEPO_GIRIS":
         islem_baslik = "İL ANA DEPO GİRİŞ TUTANAĞI"
@@ -576,7 +656,7 @@ def tutanak_html_olustur(veri: dict) -> str:
   }}
   .item-table td {{
     border: 1px solid #333;
-    padding: 10px;
+    padding: 9px 10px;
   }}
   .item-cell-flex {{
     display: flex;
@@ -675,12 +755,7 @@ def tutanak_html_olustur(veri: dict) -> str:
         </tr>
       </thead>
       <tbody>
-        <tr>
-          <td>1</td>
-          <td><div class="item-cell-flex">{urun_svg}<strong>{urun}</strong></div></td>
-          <td>{ozellik}</td>
-          <td><strong>{adet} Adet</strong></td>
-        </tr>
+        {"".join(satirlar_html)}
       </tbody>
     </table>
 
@@ -718,23 +793,29 @@ def tutanak_paneli_goster(tutanak_verisi: dict, session_key: str | None = None):
     st.divider()
     ust_c1, ust_c2, ust_c3 = st.columns([4, 2, 1])
     ust_c1.subheader(f"📄 Otomatik Tutanak (Kayıt #{tutanak_verisi['kayit_no']})")
+    guvenli_dosya_no = str(tutanak_verisi["kayit_no"]).replace(" ", "_").replace(",", "-")
     ust_c2.download_button(
         label="⬇️ Tutanağı Dosya İndir",
         data=html_kod.encode("utf-8"),
-        file_name=f"tutanak_no_{tutanak_verisi['kayit_no']}.html",
+        file_name=f"tutanak_no_{guvenli_dosya_no}.html",
         mime="text/html",
         use_container_width=True,
-        key=f"dl_{session_key}_{tutanak_verisi['kayit_no']}",
+        key=f"dl_{session_key}_{guvenli_dosya_no}",
     )
     if session_key and ust_c3.button("✖ Kapat", use_container_width=True, key=f"close_{session_key}"):
         del st.session_state[session_key]
         st.rerun()
 
-    components.html(html_kod, height=660, scrolling=True)
+    kalem_sayisi = len(tutanak_verisi.get("kalemler") or [1])
+    dinamik_yukseklik = 660 + max(0, (kalem_sayisi - 1) * 42)
+    components.html(html_kod, height=dinamik_yukseklik, scrolling=True)
 
 
 # --- UYGULAMA ARAYÜZÜ ---
 stil_uygula()
+
+if "cikis_sepeti" not in st.session_state:
+    st.session_state["cikis_sepeti"] = []
 
 render_html(
     """
@@ -807,7 +888,6 @@ sekme_durum, sekme_giris, sekme_cikis, sekme_gecmis = st.tabs(
 
 # 1. SEKME: ANLIK STOK
 with sekme_durum:
-    # Üstte 3 Temel Ürün için Modern Vektör Özet Kartları
     kart_sutunlari = st.columns(3)
     for idx, (urun_adi, ozellikler) in enumerate(URUN_KATALOGU.items()):
         gorsel = urun_gorsel_bilgisi(urun_adi, boyut=24)
@@ -955,9 +1035,13 @@ with sekme_giris:
                     "tarih_saat": kayit_zamani,
                     "islem_turu": "ANA_DEPO_GIRIS",
                     "lokasyon": "İl Ana Depo",
-                    "urun": temiz_urun,
-                    "ozellik": temiz_ozellik,
-                    "adet": giris_adet,
+                    "kalemler": [
+                        {
+                            "urun": temiz_urun,
+                            "ozellik": temiz_ozellik,
+                            "adet": giris_adet,
+                        }
+                    ],
                     "aciklama": giris_aciklama,
                     "teslim_eden": giris_teslim_eden,
                     "teslim_alan": giris_teslim_alan,
@@ -970,76 +1054,163 @@ with sekme_giris:
     if "son_giris_tutanak" in st.session_state:
         tutanak_paneli_goster(st.session_state["son_giris_tutanak"], "son_giris_tutanak")
 
-# 3. SEKME: İLÇEYE ÇIKIŞ
+# 3. SEKME: İLÇEYE ÇIKIŞ (ÇOKLU SEPET DESTEKLİ)
 with sekme_cikis:
-    st.caption(f"⏱️ Çıkış zamanı otomatik atanacaktır (Şu an: {simdi_str()})")
+    st.caption(
+        f"⏱️ Çıkış zamanı otomatik atanacaktır (Şu an: {simdi_str()}) — Birden fazla ürün ekleyip tek tutanakta çıkış yapabilirsiniz."
+    )
     ana_depo_stok = df_stok[
         (df_stok["Lokasyon"] == "İl Ana Depo") & (df_stok["Mevcut Adet"] > 0)
-    ]
+    ].copy()
 
-    if ana_depo_stok.empty:
+    # Sepette halihazırda bulunan miktarları hesaplayarak kalan sevk edilebilir stoğu bul
+    sepetteki_miktarlar = {}
+    for k in st.session_state["cikis_sepeti"]:
+        anahtar = (k["urun"], k["ozellik"])
+        sepetteki_miktarlar[anahtar] = sepetteki_miktarlar.get(anahtar, 0) + int(k["adet"])
+
+    if not ana_depo_stok.empty:
+        ana_depo_stok["Kalan_Stok"] = ana_depo_stok.apply(
+            lambda r: int(r["Mevcut Adet"])
+            - sepetteki_miktarlar.get((r["Ürün"], r["Özellik"]), 0),
+            axis=1,
+        )
+        sevk_edilebilir = ana_depo_stok[ana_depo_stok["Kalan_Stok"] > 0].copy()
+    else:
+        sevk_edilebilir = pd.DataFrame()
+
+    if ana_depo_stok.empty and not st.session_state["cikis_sepeti"]:
         st.warning("İl Ana Depoda sevk edilebilecek mevcut stok bulunmuyor.")
     else:
-        ana_depo_stok = ana_depo_stok.copy()
-        ana_depo_stok["Etiket"] = (
-            ana_depo_stok["Ürün"]
-            + " | "
-            + ana_depo_stok["Özellik"]
-            + " (Mevcut: "
-            + ana_depo_stok["Mevcut Adet"].astype(str)
-            + ")"
-        )
-
-        secilen_etiket = st.selectbox(
-            "Ana Depodan Çıkılacak Ürün ve Özellik", ana_depo_stok["Etiket"].tolist()
-        )
-        secilen_satir = ana_depo_stok[ana_depo_stok["Etiket"] == secilen_etiket].iloc[0]
-        maks_adet = int(secilen_satir["Mevcut Adet"])
-
-        urun_onizleme_karti_goster(
-            secilen_satir["Ürün"],
-            secilen_satir["Özellik"],
-            f"Sevk Edilebilir Stok: {maks_adet:,} Adet",
-        )
-
-        with st.form("ilce_cikis_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            hedef_ilce = c1.selectbox("Hedef İlçe", aktif_ilceler)
-            cikis_adet = c2.number_input(
-                "Çıkış Adedi", min_value=1, max_value=maks_adet, step=1, value=1
+        # 1. Adım: Sepete Ürün Ekleme Alanı
+        if not sevk_edilebilir.empty:
+            sevk_edilebilir["Etiket"] = (
+                sevk_edilebilir["Ürün"]
+                + " | "
+                + sevk_edilebilir["Özellik"]
+                + " (Kalan Stok: "
+                + sevk_edilebilir["Kalan_Stok"].astype(str)
+                + ")"
             )
-            cikis_aciklama = st.text_input("Açıklama (İsteğe bağlı)")
 
-            cc1, cc2 = st.columns(2)
-            cikis_teslim_eden = cc1.text_input("Tutanak: Teslim Eden Adı Soyadı (İsteğe bağlı)")
-            cikis_teslim_alan = cc2.text_input("Tutanak: Teslim Alan Adı Soyadı (İsteğe bağlı)")
+            secilen_etiket = st.selectbox(
+                "1. Sepete Eklenecek Ürün ve Boyut",
+                sevk_edilebilir["Etiket"].tolist(),
+                key="sepet_urun_secim",
+            )
+            secilen_satir = sevk_edilebilir[sevk_edilebilir["Etiket"] == secilen_etiket].iloc[0]
+            maks_adet = int(secilen_satir["Kalan_Stok"])
 
-            if st.form_submit_button("İlçeye Çıkışı Onayla ve Tutanak Oluştur", type="primary"):
-                with st.spinner("Google Sheets güncelleniyor..."):
-                    yeni_id, kayit_zamani = hareket_ekle(
-                        "ILCE_CIKIS",
-                        hedef_ilce,
-                        secilen_satir["Ürün"],
-                        secilen_satir["Özellik"],
-                        cikis_adet,
-                        cikis_aciklama,
+            urun_onizleme_karti_goster(
+                secilen_satir["Ürün"],
+                secilen_satir["Özellik"],
+                f"Eklenebilir Kalan Stok: {maks_adet:,} Adet",
+            )
+
+            col_s1, col_s2 = st.columns([2, 1])
+            eklenecek_adet = col_s1.number_input(
+                "Çıkış Adedi",
+                min_value=1,
+                max_value=maks_adet,
+                step=1,
+                value=1,
+                key="sepet_adet_input",
+            )
+            col_s2.write("")
+            col_s2.write("")
+            if col_s2.button("➕ Sevk Sepetine Ekle", use_container_width=True):
+                mevcut_sepet = st.session_state["cikis_sepeti"]
+                guncellendi = False
+                for item in mevcut_sepet:
+                    if (
+                        item["urun"] == secilen_satir["Ürün"]
+                        and item["ozellik"] == secilen_satir["Özellik"]
+                    ):
+                        item["adet"] += int(eklenecek_adet)
+                        guncellendi = True
+                        break
+                if not guncellendi:
+                    mevcut_sepet.append(
+                        {
+                            "urun": secilen_satir["Ürün"],
+                            "ozellik": secilen_satir["Özellik"],
+                            "adet": int(eklenecek_adet),
+                        }
                     )
-                st.session_state["son_cikis_tutanak"] = {
-                    "kayit_no": yeni_id,
-                    "tarih_saat": kayit_zamani,
-                    "islem_turu": "ILCE_CIKIS",
-                    "lokasyon": hedef_ilce,
-                    "urun": secilen_satir["Ürün"],
-                    "ozellik": secilen_satir["Özellik"],
-                    "adet": cikis_adet,
-                    "aciklama": cikis_aciklama,
-                    "teslim_eden": cikis_teslim_eden,
-                    "teslim_alan": cikis_teslim_alan,
-                }
-                st.success(
-                    f"{secilen_satir['Ürün']} ({secilen_satir['Özellik']}) - {cikis_adet} adet {hedef_ilce} stoğuna aktarıldı. Tutanak aşağıda hazırlandı."
-                )
                 st.rerun()
+        else:
+            st.info("Ana depodaki tüm kullanılabilir ürünler sevk sepetine eklendi.")
+
+        # 2. Adım: Sepet Özeti ve Toplu Onay Formu
+        if st.session_state["cikis_sepeti"]:
+            st.divider()
+            sep_baslik_c1, sep_baslik_c2 = st.columns([4, 1])
+            toplam_sepet_adet = sum(x["adet"] for x in st.session_state["cikis_sepeti"])
+            sep_baslik_c1.subheader(
+                f"🛒 Sevk Sepeti ({len(st.session_state['cikis_sepeti'])} Kalem / Toplam {toplam_sepet_adet:,} Adet)"
+            )
+            if sep_baslik_c2.button("🗑️ Sepeti Temizle", use_container_width=True):
+                st.session_state["cikis_sepeti"] = []
+                st.rerun()
+
+            for idx, item in enumerate(st.session_state["cikis_sepeti"]):
+                gorsel = urun_gorsel_bilgisi(item["urun"], boyut=20)
+                r_c1, r_c2 = st.columns([6, 1])
+                with r_c1:
+                    render_html(
+                        f"""
+                        <div class="cart-row">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                {gorsel['svg']}
+                                <span><strong>{html.escape(item['urun'])}</strong> — {html.escape(item['ozellik'])}</span>
+                            </div>
+                            <span style="font-weight: 700; color: {gorsel['renk']};">{item['adet']:,} Adet</span>
+                        </div>
+                        """
+                    )
+                with r_c2:
+                    if st.button("Çıkar", key=f"sepet_sil_{idx}", use_container_width=True):
+                        st.session_state["cikis_sepeti"].pop(idx)
+                        st.rerun()
+
+            with st.form("ilce_toplu_cikis_form", clear_on_submit=True):
+                hedef_ilce = st.selectbox("2. Hedef İlçe Seçin", aktif_ilceler)
+                cikis_aciklama = st.text_input("Açıklama / Sevkiyat Notu (İsteğe bağlı)")
+
+                cc1, cc2 = st.columns(2)
+                cikis_teslim_eden = cc1.text_input("Tutanak: Teslim Eden Adı Soyadı (İsteğe bağlı)")
+                cikis_teslim_alan = cc2.text_input("Tutanak: Teslim Alan Adı Soyadı (İsteğe bağlı)")
+
+                if st.form_submit_button(
+                    "✅ İlçeye Çıkışı Onayla ve Ortak Tutanak Oluştur", type="primary"
+                ):
+                    sepet_kopya = [dict(x) for x in st.session_state["cikis_sepeti"]]
+                    with st.spinner("Tüm kalemler Google Sheets'e işleniyor..."):
+                        eklenen_idler, kayit_zamani = toplu_ilce_cikis_ekle(
+                            hedef_ilce,
+                            sepet_kopya,
+                            cikis_aciklama,
+                        )
+                    if len(eklenen_idler) == 1:
+                        kayit_no_etiket = str(eklenen_idler[0])
+                    else:
+                        kayit_no_etiket = f"{eklenen_idler[0]} - {eklenen_idler[-1]}"
+
+                    st.session_state["son_cikis_tutanak"] = {
+                        "kayit_no": kayit_no_etiket,
+                        "tarih_saat": kayit_zamani,
+                        "islem_turu": "ILCE_CIKIS",
+                        "lokasyon": hedef_ilce,
+                        "kalemler": sepet_kopya,
+                        "aciklama": cikis_aciklama,
+                        "teslim_eden": cikis_teslim_eden,
+                        "teslim_alan": cikis_teslim_alan,
+                    }
+                    st.session_state["cikis_sepeti"] = []
+                    st.success(
+                        f"{len(sepet_kopya)} kalem ({toplam_sepet_adet:,} adet) ürün {hedef_ilce} stoğuna aktarıldı. Ortak tutanak aşağıda hazırlandı."
+                    )
+                    st.rerun()
 
     if "son_cikis_tutanak" in st.session_state:
         tutanak_paneli_goster(st.session_state["son_cikis_tutanak"], "son_cikis_tutanak")
@@ -1074,14 +1245,41 @@ with sekme_gecmis:
             kayit_nolar = df_hareket["id"].tolist()
             secilen_no = st.selectbox("Tutanak Yazdırılacak Kayıt No", kayit_nolar)
             satir = df_hareket[df_hareket["id"] == secilen_no].iloc[0]
+
+            # Aynı saniyede aynı ilçeye toplu çıkış yapıldıysa tüm kalemleri birlikte getir
+            ayni_sevkiyat = df_hareket[
+                (df_hareket["tarih_saat"] == satir["tarih_saat"])
+                & (df_hareket["islem_turu"] == satir["islem_turu"])
+                & (df_hareket["lokasyon"] == satir["lokasyon"])
+            ].sort_values(by="id")
+
+            if len(ayni_sevkiyat) > 1:
+                id_listesi = ayni_sevkiyat["id"].tolist()
+                kayit_no_etiket = f"{id_listesi[0]} - {id_listesi[-1]}"
+                kalem_listesi = [
+                    {
+                        "urun": r["urun"],
+                        "ozellik": r["ozellik"],
+                        "adet": int(r["adet"]),
+                    }
+                    for _, r in ayni_sevkiyat.iterrows()
+                ]
+            else:
+                kayit_no_etiket = str(int(satir["id"]))
+                kalem_listesi = [
+                    {
+                        "urun": satir["urun"],
+                        "ozellik": satir["ozellik"],
+                        "adet": int(satir["adet"]),
+                    }
+                ]
+
             gecmis_tutanak = {
-                "kayit_no": int(satir["id"]),
+                "kayit_no": kayit_no_etiket,
                 "tarih_saat": satir["tarih_saat"],
                 "islem_turu": satir["islem_turu"],
                 "lokasyon": satir["lokasyon"],
-                "urun": satir["urun"],
-                "ozellik": satir["ozellik"],
-                "adet": int(satir["adet"]),
+                "kalemler": kalem_listesi,
                 "aciklama": satir["aciklama"],
                 "teslim_eden": "",
                 "teslim_alan": "",
