@@ -148,18 +148,6 @@ def stil_uygula():
     render_html(
         """
         <style>
-        .prod-card {
-            border: 1px solid rgba(128, 128, 128, 0.22);
-            border-radius: 12px;
-            padding: 14px 16px;
-            margin-bottom: 10px;
-        }
-        .prod-card-top {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 8px;
-        }
         .prod-icon-wrap {
             width: 40px;
             height: 40px;
@@ -168,37 +156,6 @@ def stil_uygula():
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-        }
-        .prod-name {
-            font-size: 14.5px;
-            font-weight: 600;
-        }
-        .prod-total {
-            font-size: 21px;
-            font-weight: 700;
-            line-height: 1.2;
-        }
-        .prod-meta {
-            display: flex;
-            justify-content: space-between;
-            font-size: 12.5px;
-            opacity: 0.8;
-            padding-top: 8px;
-            border-top: 1px solid rgba(128, 128, 128, 0.16);
-        }
-        .size-pills {
-            display: flex;
-            gap: 6px;
-            margin-top: 8px;
-            flex-wrap: wrap;
-        }
-        .size-pill {
-            font-size: 11.5px;
-            font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 999px;
-            background: rgba(13, 148, 136, 0.12);
-            color: #0D9488;
         }
         .preview-banner {
             display: flex;
@@ -449,6 +406,66 @@ def anlik_stok_hesapla(df_hareket: pd.DataFrame) -> pd.DataFrame:
     return df_stok.sort_values(by=["Lokasyon", "Ürün", "Özellik"]).reset_index(drop=True)
 
 
+def sade_stok_ozeti_olustur(df_stok: pd.DataFrame, aktif_ilceler: list[str]) -> pd.DataFrame:
+    """İl Ana Depo ve ilçelerin elindeki mevcut stokları sade bir özet tablo haline getirir."""
+    temel_sutunlar = [
+        "HPV DNA Testi",
+        "Spekulum (S)",
+        "Spekulum (M)",
+        "Spekulum (L)",
+        "Spekulum Toplam (S-M-L)",
+        "Kargo Poşeti",
+    ]
+
+    if df_stok.empty:
+        return pd.DataFrame(columns=["Lokasyon"] + temel_sutunlar)
+
+    df_temp = df_stok.copy()
+    df_temp["Kalem"] = df_temp.apply(
+        lambda r: r["Ürün"]
+        if str(r["Özellik"]).strip() in ("", "Standart")
+        else f"{r['Ürün']} ({r['Özellik']})",
+        axis=1,
+    )
+
+    pivot = df_temp.pivot_table(
+        index="Lokasyon",
+        columns="Kalem",
+        values="Mevcut Adet",
+        aggfunc="sum",
+        fill_value=0,
+    )
+
+    # Bilinen temel sütunların eksiksiz yer almasını sağla
+    for col in [
+        "HPV DNA Testi",
+        "Spekulum (S)",
+        "Spekulum (M)",
+        "Spekulum (L)",
+        "Kargo Poşeti",
+    ]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+
+    pivot["Spekulum Toplam (S-M-L)"] = (
+        pivot["Spekulum (S)"] + pivot["Spekulum (M)"] + pivot["Spekulum (L)"]
+    )
+
+    ekstra_sutunlar = [c for c in pivot.columns if c not in temel_sutunlar]
+    sirali_sutunlar = temel_sutunlar + ekstra_sutunlar
+    pivot = pivot[sirali_sutunlar]
+
+    # İl Ana Depo her zaman en üstte, ardından stok hareketi olan veya kayıtlı ilçeler alfabetik
+    diger_lokasyonlar = sorted([lok for lok in pivot.index if lok != "İl Ana Depo"])
+    if "İl Ana Depo" in pivot.index:
+        sirali_indeks = ["İl Ana Depo"] + diger_lokasyonlar
+    else:
+        sirali_indeks = diger_lokasyonlar
+
+    pivot = pivot.reindex(sirali_indeks).reset_index()
+    return pivot
+
+
 def excel_olustur(df_stok: pd.DataFrame, df_hareket: pd.DataFrame) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -547,7 +564,6 @@ def tutanak_html_olustur(veri: dict) -> str:
             """
         )
 
-    # Farklı ürünler birbirine toplanmaz; yalnızca Spekulum'da birden fazla beden (S/M/L) varsa alt toplam gösterilir
     if len(spekulum_kalemleri) > 1:
         spekulum_toplam = sum(int(x.get("adet", 0)) for x in spekulum_kalemleri)
         beden_sirasi = {"S": 0, "M": 1, "L": 2}
@@ -864,20 +880,21 @@ except Exception as e:
     st.stop()
 
 df_stok = anlik_stok_hesapla(df_hareket)
+excel_verisi = excel_olustur(df_stok, df_hareket)
+dosya_adi = f"stok_raporu_{datetime.now(TZ).strftime('%Y%m%d_%H%M')}.xlsx"
 
 col_baslik, col_excel, col_yenile = st.columns([6, 2, 1.5])
 col_baslik.title("📦 Stok Takip Sistemi")
 
 with col_excel:
     st.write("")
-    excel_verisi = excel_olustur(df_stok, df_hareket)
-    dosya_adi = f"stok_raporu_{datetime.now(TZ).strftime('%Y%m%d_%H%M')}.xlsx"
     st.download_button(
         label="📊 Excel İndir",
         data=excel_verisi,
         file_name=dosya_adi,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
+        key="ust_excel_indir",
     )
 
 with col_yenile:
@@ -896,82 +913,21 @@ sekme_durum, sekme_giris, sekme_cikis, sekme_sarf, sekme_gecmis = st.tabs(
     ]
 )
 
-# 1. SEKME: ANLIK STOK
+# 1. SEKME: SADE STOK DURUMU (İL ANA DEPO VE İLÇELER)
 with sekme_durum:
-    kart_sutunlari = st.columns(3)
-    for idx, (urun_adi, ozellikler) in enumerate(URUN_KATALOGU.items()):
-        gorsel = urun_gorsel_bilgisi(urun_adi, boyut=22)
-        if df_stok.empty:
-            ana_adet = 0
-            ilce_adet = 0
-        else:
-            u_df = df_stok[df_stok["Ürün"] == urun_adi]
-            ana_adet = int(u_df[u_df["Lokasyon"] == "İl Ana Depo"]["Mevcut Adet"].sum())
-            ilce_adet = int(u_df[u_df["Lokasyon"] != "İl Ana Depo"]["Mevcut Adet"].sum())
-
-        # Sadece aynı ürünün (Spekulum'un S-M-L bedenleri gibi) kendi içindeki toplamı hesaplanır
-        urun_kendi_toplami = ana_adet + ilce_adet
-
-        beden_html = ""
-        if len(ozellikler) > 1:
-            pills = []
-            for oz in ozellikler:
-                oz_ana = (
-                    int(
-                        df_stok[
-                            (df_stok["Ürün"] == urun_adi)
-                            & (df_stok["Özellik"] == oz)
-                            & (df_stok["Lokasyon"] == "İl Ana Depo")
-                        ]["Mevcut Adet"].sum()
-                    )
-                    if not df_stok.empty
-                    else 0
-                )
-                pills.append(f'<span class="size-pill">{oz}: {oz_ana}</span>')
-            beden_html = f'<div class="size-pills">{"".join(pills)}</div>'
-
-        with kart_sutunlari[idx]:
-            render_html(
-                f"""
-                <div class="prod-card">
-                    <div class="prod-card-top">
-                        <div class="prod-icon-wrap" style="background: {gorsel['bg']};">
-                            {gorsel['svg']}
-                        </div>
-                        <div>
-                            <div class="prod-name">{html.escape(urun_adi)}</div>
-                            <div class="prod-total" style="color: {gorsel['renk']};">{urun_kendi_toplami:,}</div>
-                        </div>
-                    </div>
-                    <div class="prod-meta">
-                        <span>Ana Depo: <strong>{ana_adet:,}</strong></span>
-                        <span>İlçeler: <strong>{ilce_adet:,}</strong></span>
-                    </div>
-                    {beden_html}
-                </div>
-                """
-            )
-
     if df_stok.empty:
         st.info("Henüz stok hareketi bulunmuyor.")
     else:
-        f_col1, f_col2 = st.columns(2)
-        lokasyonlar = ["Tümü"] + sorted(df_stok["Lokasyon"].unique().tolist())
-        tum_urunler = sorted(
-            set(list(URUN_KATALOGU.keys()) + df_stok["Ürün"].unique().tolist())
+        df_ozet = sade_stok_ozeti_olustur(df_stok, aktif_ilceler)
+        st.dataframe(df_ozet, use_container_width=True, hide_index=True)
+
+        st.download_button(
+            label="📥 Ayrıntılı Excel Raporu İndir (.xlsx)",
+            data=excel_verisi,
+            file_name=dosya_adi,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="sekme_excel_indir",
         )
-        urunler = ["Tümü"] + tum_urunler
-
-        secilen_lokasyon = f_col1.selectbox("Lokasyon", lokasyonlar)
-        secilen_urun = f_col2.selectbox("Ürün", urunler)
-
-        df_goster = df_stok.copy()
-        if secilen_lokasyon != "Tümü":
-            df_goster = df_goster[df_goster["Lokasyon"] == secilen_lokasyon]
-        if secilen_urun != "Tümü":
-            df_goster = df_goster[df_goster["Ürün"] == secilen_urun]
-
-        st.dataframe(df_goster, use_container_width=True, hide_index=True)
 
 # 2. SEKME: İL ANA DEPOYA GİRİŞ
 with sekme_giris:
