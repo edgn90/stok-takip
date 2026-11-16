@@ -21,6 +21,13 @@ HAREKET_BASLIKLAR = [
     "aciklama",
 ]
 
+# Tanımlı Ürün Kataloğu ve Özellik/Boyut Seçenekleri
+URUN_KATALOGU = {
+    "HPV DNA Testi": ["Standart"],
+    "Spekulum": ["S", "M", "L"],
+    "Kargo Poşeti": ["Standart"],
+}
+
 ISTANBUL_ILCELERI = [
     "Adalar",
     "Arnavutköy",
@@ -118,7 +125,6 @@ def verileri_getir() -> tuple[pd.DataFrame, list[str]]:
 
     ilce_sutunu = [x.strip() for x in ws_ilce.col_values(1)[1:] if x.strip()]
 
-    # Tabloda hâlâ ilk kurulumdaki örnek ilçeler varsa otomatik olarak 39 İstanbul ilçesiyle değiştir
     if not ilce_sutunu or set(ilce_sutunu).issubset(ESKI_ORNEK_ILCELER):
         ws_ilce.clear()
         ws_ilce.update(
@@ -306,7 +312,10 @@ with sekme_durum:
     else:
         f_col1, f_col2 = st.columns(2)
         lokasyonlar = ["Tümü"] + sorted(df_stok["Lokasyon"].unique().tolist())
-        urunler = ["Tümü"] + sorted(df_stok["Ürün"].unique().tolist())
+        tum_urunler = sorted(
+            set(list(URUN_KATALOGU.keys()) + df_stok["Ürün"].unique().tolist())
+        )
+        urunler = ["Tümü"] + tum_urunler
 
         secilen_lokasyon = f_col1.selectbox("Lokasyon Filtrele", lokasyonlar)
         secilen_urun = f_col2.selectbox("Ürün Filtrele", urunler)
@@ -322,46 +331,48 @@ with sekme_durum:
 # 2. SEKME: İL ANA DEPOYA GİRİŞ
 with sekme_giris:
     st.caption(f"Kayıt zamanı otomatik atanacaktır (Şu an: {simdi_str()})")
-    mevcut_urunler = sorted(df_hareket["urun"].unique().tolist()) if not df_hareket.empty else []
-    mevcut_ozellikler = (
-        sorted(df_hareket["ozellik"].unique().tolist()) if not df_hareket.empty else []
-    )
+
+    secenek_listesi = list(URUN_KATALOGU.keys()) + ["+ Diğer (Yeni Ürün Ekle)"]
+    c_u1, c_u2 = st.columns(2)
+    secilen_urun_tipi = c_u1.selectbox("Ürün Seçin", secenek_listesi)
+
+    if secilen_urun_tipi == "+ Diğer (Yeni Ürün Ekle)":
+        final_urun = c_u1.text_input("Yeni Ürün Adı")
+        final_ozellik = c_u2.text_input(
+            "Özellik / Boyut (Boş bırakılırsa Standart kaydedilir)", value="Standart"
+        )
+    else:
+        final_urun = secilen_urun_tipi
+        ozellik_listesi = URUN_KATALOGU[secilen_urun_tipi]
+        if len(ozellik_listesi) > 1:
+            final_ozellik = c_u2.selectbox("Boyut / Özellik Seçin", ozellik_listesi)
+        else:
+            final_ozellik = ozellik_listesi[0]
+            c_u2.text_input("Özellik", value=final_ozellik, disabled=True)
 
     with st.form("ana_depo_giris_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        urun_secim = c1.selectbox("Kayıtlı Ürün Seç", ["+ Yeni Ürün Gir"] + mevcut_urunler)
-        yeni_urun = c2.text_input("Yeni Ürün Adı (Yukarıda 'Yeni Ürün' seçiliyse)")
-
-        c3, c4 = st.columns(2)
-        ozellik_secim = c3.selectbox(
-            "Kayıtlı Özellik Seç", ["+ Yeni Özellik Gir"] + mevcut_ozellikler
-        )
-        yeni_ozellik = c4.text_input("Yeni Özellik / Model / Boyut")
-
-        c5, c6 = st.columns([1, 2])
-        giris_adet = c5.number_input("Giriş Adedi", min_value=1, step=1, value=1)
-        giris_aciklama = c6.text_input("Açıklama / İrsaliye No (İsteğe bağlı)")
+        c1, c2 = st.columns([1, 2])
+        giris_adet = c1.number_input("Giriş Adedi", min_value=1, step=1, value=1)
+        giris_aciklama = c2.text_input("Açıklama / İrsaliye No (İsteğe bağlı)")
 
         if st.form_submit_button("Ana Depoya Kaydet", type="primary"):
-            final_urun = yeni_urun.strip() if urun_secim == "+ Yeni Ürün Gir" else urun_secim
-            final_ozellik = (
-                yeni_ozellik.strip() if ozellik_secim == "+ Yeni Özellik Gir" else ozellik_secim
-            )
+            temiz_urun = final_urun.strip()
+            temiz_ozellik = final_ozellik.strip() if final_ozellik.strip() else "Standart"
 
-            if not final_urun or not final_ozellik:
-                st.error("Ürün adı ve özellik alanları boş bırakılamaz.")
+            if not temiz_urun:
+                st.error("Ürün adı boş bırakılamaz.")
             else:
                 with st.spinner("Google Sheets'e kaydediliyor..."):
                     hareket_ekle(
                         "ANA_DEPO_GIRIS",
                         "İl Ana Depo",
-                        final_urun,
-                        final_ozellik,
+                        temiz_urun,
+                        temiz_ozellik,
                         giris_adet,
                         giris_aciklama,
                     )
                 st.success(
-                    f"{final_urun} ({final_ozellik}) - {giris_adet} adet İl Ana Depoya eklendi."
+                    f"{temiz_urun} ({temiz_ozellik}) - {giris_adet} adet İl Ana Depoya eklendi."
                 )
                 st.rerun()
 
