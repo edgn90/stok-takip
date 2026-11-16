@@ -21,15 +21,49 @@ HAREKET_BASLIKLAR = [
     "aciklama",
 ]
 
-# İlk kurulumda Google E-Tablo içindeki 'ilceler' sekmesine otomatik yazılır.
-# Daha sonra ilçe eklemek/çıkarmak için doğrudan Google Sheets'teki 'ilceler' sekmesini düzenleyebilirsiniz.
-VARSAYILAN_ILCELER = [
-    "İlçe 1",
-    "İlçe 2",
-    "İlçe 3",
-    "İlçe 4",
-    "İlçe 5",
+ISTANBUL_ILCELERI = [
+    "Adalar",
+    "Arnavutköy",
+    "Ataşehir",
+    "Avcılar",
+    "Bağcılar",
+    "Bahçelievler",
+    "Bakırköy",
+    "Başakşehir",
+    "Bayrampaşa",
+    "Beşiktaş",
+    "Beykoz",
+    "Beylikdüzü",
+    "Beyoğlu",
+    "Büyükçekmece",
+    "Çatalca",
+    "Çekmeköy",
+    "Esenler",
+    "Esenyurt",
+    "Eyüpsultan",
+    "Fatih",
+    "Gaziosmanpaşa",
+    "Güngören",
+    "Kadıköy",
+    "Kağıthane",
+    "Kartal",
+    "Küçükçekmece",
+    "Maltepe",
+    "Pendik",
+    "Sancaktepe",
+    "Sarıyer",
+    "Silivri",
+    "Sultanbeyli",
+    "Sultangazi",
+    "Şile",
+    "Şişli",
+    "Tuzla",
+    "Ümraniye",
+    "Üsküdar",
+    "Zeytinburnu",
 ]
+
+ESKI_ORNEK_ILCELER = {"İlçe 1", "İlçe 2", "İlçe 3", "İlçe 4", "İlçe 5"}
 
 
 @st.cache_resource
@@ -68,7 +102,7 @@ def verileri_getir() -> tuple[pd.DataFrame, list[str]]:
         sh,
         "ilceler",
         ["ilce_adi"],
-        [[ilce] for ilce in VARSAYILAN_ILCELER],
+        [[ilce] for ilce in ISTANBUL_ILCELERI],
     )
 
     kayitlar = ws_hareket.get_all_records()
@@ -82,8 +116,19 @@ def verileri_getir() -> tuple[pd.DataFrame, list[str]]:
             df[col] = df[col].astype(str)
         df = df.sort_values(by="id", ascending=False).reset_index(drop=True)
 
-    ilce_sutunu = ws_ilce.col_values(1)[1:]
-    ilceler = [x.strip() for x in ilce_sutunu if x.strip()] or VARSAYILAN_ILCELER
+    ilce_sutunu = [x.strip() for x in ws_ilce.col_values(1)[1:] if x.strip()]
+
+    # Tabloda hâlâ ilk kurulumdaki örnek ilçeler varsa otomatik olarak 39 İstanbul ilçesiyle değiştir
+    if not ilce_sutunu or set(ilce_sutunu).issubset(ESKI_ORNEK_ILCELER):
+        ws_ilce.clear()
+        ws_ilce.update(
+            range_name="A1",
+            values=[["ilce_adi"]] + [[ilce] for ilce in ISTANBUL_ILCELERI],
+        )
+        ilceler = ISTANBUL_ILCELERI
+    else:
+        ilceler = ilce_sutunu
+
     return df, ilceler
 
 
