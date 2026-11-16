@@ -157,29 +157,32 @@ def stil_uygula():
             justify-content: center;
             flex-shrink: 0;
         }
-        .legend-strip {
+        .table-prod-header {
             display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 12px;
-        }
-        .legend-chip {
-            display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             border: 1px solid rgba(128, 128, 128, 0.22);
             border-radius: 10px;
-            padding: 6px 12px;
-            font-size: 13px;
-            font-weight: 600;
+            padding: 9px 12px;
+            margin-bottom: 10px;
         }
-        .legend-icon {
-            width: 28px;
-            height: 28px;
-            border-radius: 7px;
+        .table-prod-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
+            flex-shrink: 0;
+        }
+        .table-prod-title {
+            font-size: 13.5px;
+            font-weight: 700;
+            line-height: 1.25;
+        }
+        .table-prod-sub {
+            font-size: 11.5px;
+            opacity: 0.75;
         }
         .preview-banner {
             display: flex;
@@ -245,20 +248,34 @@ def urun_onizleme_karti_goster(urun_adi: str, ozellik: str, stok_bilgisi: str):
     )
 
 
-def stok_urun_seridi_goster():
-    etiketler = []
-    for urun_adi, ozellikler in URUN_KATALOGU.items():
-        gorsel = urun_gorsel_bilgisi(urun_adi, boyut=18)
-        alt_bilgi = f" ({'-'.join(ozellikler)})" if len(ozellikler) > 1 else ""
-        etiketler.append(
-            f"""
-            <div class="legend-chip">
-                <span class="legend-icon" style="background: {gorsel['bg']};">{gorsel['svg']}</span>
-                <span>{html.escape(urun_adi)}{html.escape(alt_bilgi)}</span>
-            </div>
-            """
-        )
-    render_html(f'<div class="legend-strip">{"".join(etiketler)}</div>')
+def tablo_ustu_urun_vektorleri_goster(ekstra_urunler: list[str] | None = None):
+    """Tablonun hemen üstünde yer alan ürün vektör başlıkları."""
+    urun_listesi = list(URUN_KATALOGU.keys())
+    if ekstra_urunler:
+        for u in ekstra_urunler:
+            if u not in urun_listesi:
+                urun_listesi.append(u)
+
+    kolonlar = st.columns(len(urun_listesi))
+    for idx, urun_adi in enumerate(urun_listesi):
+        gorsel = urun_gorsel_bilgisi(urun_adi, boyut=20)
+        ozellikler = URUN_KATALOGU.get(urun_adi, ["Standart"])
+        alt_yazi = f"Boyutlar: {' / '.join(ozellikler)}" if len(ozellikler) > 1 else "Standart"
+
+        with kolonlar[idx]:
+            render_html(
+                f"""
+                <div class="table-prod-header">
+                    <div class="table-prod-icon" style="background: {gorsel['bg']};">
+                        {gorsel['svg']}
+                    </div>
+                    <div>
+                        <div class="table-prod-title" style="color: {gorsel['renk']};">{html.escape(urun_adi)}</div>
+                        <div class="table-prod-sub">{html.escape(alt_yazi)}</div>
+                    </div>
+                </div>
+                """
+            )
 
 
 @st.cache_resource
@@ -940,9 +957,12 @@ sekme_durum, sekme_giris, sekme_cikis, sekme_sarf, sekme_gecmis = st.tabs(
     ]
 )
 
-# 1. SEKME: SADE STOK DURUMU (İL ANA DEPO VE İLÇELER)
+# 1. SEKME: SADE STOK DURUMU (TABLO ÜSTÜNDE ÜRÜN VEKTÖRLERİ İLE)
 with sekme_durum:
-    stok_urun_seridi_goster()
+    ekstra_urun_listesi = (
+        sorted(df_stok["Ürün"].unique().tolist()) if not df_stok.empty else None
+    )
+    tablo_ustu_urun_vektorleri_goster(ekstra_urun_listesi)
 
     if df_stok.empty:
         st.info("Henüz stok hareketi bulunmuyor.")
