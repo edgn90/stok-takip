@@ -23,6 +23,13 @@ HAREKET_BASLIKLAR = [
     "aciklama",
 ]
 
+ISLEM_ETIKETLERI = {
+    "ANA_DEPO_GIRIS": "İl Ana Depo Giriş",
+    "ILCE_CIKIS": "İlçeye Çıkış",
+    "ILCE_KULLANIM": "İlçe Kullanım (Sarf)",
+    "ILCE_ZAYI": "İlçe Zayi",
+}
+
 URUN_KATALOGU = {
     "HPV DNA Testi": ["Standart"],
     "Spekulum": ["S", "M", "L"],
@@ -433,7 +440,8 @@ def anlik_stok_hesapla(df_hareket: pd.DataFrame) -> pd.DataFrame:
 
     kayitlar = []
     for _, row in df_hareket.iterrows():
-        if row["islem_turu"] == "ANA_DEPO_GIRIS":
+        tur = row["islem_turu"]
+        if tur == "ANA_DEPO_GIRIS":
             kayitlar.append(
                 {
                     "Lokasyon": "İl Ana Depo",
@@ -442,7 +450,7 @@ def anlik_stok_hesapla(df_hareket: pd.DataFrame) -> pd.DataFrame:
                     "Degisim": row["adet"],
                 }
             )
-        elif row["islem_turu"] == "ILCE_CIKIS":
+        elif tur == "ILCE_CIKIS":
             kayitlar.append(
                 {
                     "Lokasyon": "İl Ana Depo",
@@ -457,6 +465,15 @@ def anlik_stok_hesapla(df_hareket: pd.DataFrame) -> pd.DataFrame:
                     "Ürün": row["urun"],
                     "Özellik": row["ozellik"],
                     "Degisim": row["adet"],
+                }
+            )
+        elif tur in ("ILCE_KULLANIM", "ILCE_ZAYI"):
+            kayitlar.append(
+                {
+                    "Lokasyon": row["lokasyon"],
+                    "Ürün": row["urun"],
+                    "Özellik": row["ozellik"],
+                    "Degisim": -row["adet"],
                 }
             )
 
@@ -487,7 +504,30 @@ def excel_olustur(df_stok: pd.DataFrame, df_hareket: pd.DataFrame) -> bytes:
             ).reset_index()
             df_pivot.to_excel(writer, sheet_name="Il_Ilce_Matrisi", index=False)
 
-        df_log = df_hareket.rename(
+        if not df_hareket.empty:
+            df_sarf = df_hareket[df_hareket["islem_turu"].isin(["ILCE_KULLANIM", "ILCE_ZAYI"])].copy()
+            if not df_sarf.empty:
+                df_sarf["Tur_Adi"] = df_sarf["islem_turu"].map(
+                    {"ILCE_KULLANIM": "Kullanılan Adet", "ILCE_ZAYI": "Zayi Adet"}
+                )
+                df_sarf_ozet = df_sarf.pivot_table(
+                    index=["lokasyon", "urun", "ozellik"],
+                    columns="Tur_Adi",
+                    values="adet",
+                    aggfunc="sum",
+                    fill_value=0,
+                ).reset_index()
+                df_sarf_ozet = df_sarf_ozet.rename(
+                    columns={"lokasyon": "İlçe", "urun": "Ürün", "ozellik": "Özellik"}
+                )
+                df_sarf_ozet.to_excel(writer, sheet_name="Ilce_Kullanim_Zayi", index=False)
+
+        df_log = df_hareket.copy()
+        if not df_log.empty:
+            df_log["islem_turu"] = df_log["islem_turu"].map(
+                lambda x: ISLEM_ETIKETLERI.get(x, x)
+            )
+        df_log = df_log.rename(
             columns={
                 "id": "Kayıt No",
                 "tarih_saat": "Tarih ve Saat",
@@ -513,7 +553,6 @@ def tutanak_html_olustur(veri: dict) -> str:
     teslim_eden = html.escape(str(veri.get("teslim_eden", "")).strip())
     teslim_alan = html.escape(str(veri.get("teslim_alan", "")).strip())
 
-    # Tek kalem veya çoklu kalem listesini destekle
     kalemler = veri.get("kalemler")
     if not kalemler:
         kalemler = [
@@ -555,17 +594,45 @@ def tutanak_html_olustur(veri: dict) -> str:
         )
 
     if islem_turu == "ANA_DEPO_GIRIS":
+        ust_baslik = "MALZEME TESLİM - TESELLÜM TUTANAĞI"
         islem_baslik = "İL ANA DEPO GİRİŞ TUTANAĞI"
         gonderen_birim = "Tedarikçi / Gönderen Birim"
         alan_birim = "İstanbul İl Ana Depo"
+        sol_imza_baslik = "TESLİM EDEN"
+        sag_imza_baslik = "TESLİM ALAN"
         beyan_metni = (
             "Yukarıda cinsi, özelliği ve miktarı belirtilen malzemeler eksiksiz ve sağlam "
             "olarak İl Ana Depo stoklarına teslim alınmıştır."
         )
+    elif islem_turu == "ILCE_KULLANIM":
+        ust_baslik = "MALZEME SARF / KULLANIM BİLDİRİM TUTANAĞI"
+        islem_baslik = f"{lokasyon.upper()} İLÇE SAHA KULLANIM TUTANAĞI"
+        gonderen_birim = f"{lokasyon} İlçe Birimi"
+        alan_birim = "Saha Tarama / Hizmet Kullanımı"
+        sol_imza_baslik = "BİLDİRİMİ YAPAN"
+        sag_imza_baslik = "BİRİM SORUMLUSU / ONAY"
+        beyan_metni = (
+            f"Yukarıda cinsi, özelliği ve miktarı belirtilen malzemeler {lokasyon} İlçe Birimi "
+            f"tarafından yürütülen saha ve tarama faaliyetlerinde kullanılmış olup ilçe stoğundan düşülmüştür."
+        )
+    elif islem_turu == "ILCE_ZAYI":
+        ust_baslik = "MALZEME ZAYİ / İMHA TESPİT TUTANAĞI"
+        islem_baslik = f"{lokasyon.upper()} İLÇE ZAYİ BİLDİRİM TUTANAĞI"
+        gonderen_birim = f"{lokasyon} İlçe Birimi"
+        alan_birim = "Zayi / Kullanım Dışı Stok Düşümü"
+        sol_imza_baslik = "TESPİT EDEN"
+        sag_imza_baslik = "BİRİM SORUMLUSU / ONAY"
+        beyan_metni = (
+            f"Yukarıda cinsi, özelliği ve miktarı belirtilen malzemeler {lokasyon} İlçe Birimi "
+            f"kayıtlarında belirtilen gerekçeyle zayi/kullanım dışı olarak tespit edilmiş ve ilçe stoğundan düşülmüştür."
+        )
     else:
+        ust_baslik = "MALZEME TESLİM - TESELLÜM TUTANAĞI"
         islem_baslik = "İLÇE MALZEME SEVK VE TESLİM TUTANAĞI"
         gonderen_birim = "İstanbul İl Ana Depo"
         alan_birim = f"{lokasyon} İlçe Birimi"
+        sol_imza_baslik = "TESLİM EDEN"
+        sag_imza_baslik = "TESLİM ALAN"
         beyan_metni = (
             f"Yukarıda cinsi, özelliği ve miktarı belirtilen malzemeler İl Ana Depodan çıkış "
             f"yapılarak {alan_birim} yetkilisine eksiksiz ve sağlam olarak teslim edilmiştir."
@@ -578,7 +645,7 @@ def tutanak_html_olustur(veri: dict) -> str:
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<title>Teslim Tesellüm Tutanağı - No {kayit_no}</title>
+<title>Tutanak - No {kayit_no}</title>
 <style>
   body {{
     font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
@@ -726,7 +793,7 @@ def tutanak_html_olustur(veri: dict) -> str:
   </div>
   <div class="page">
     <div class="header">
-      <h1>MALZEME TESLİM - TESELLÜM TUTANAĞI</h1>
+      <h1>{ust_baslik}</h1>
       <h2>{islem_baslik}</h2>
     </div>
 
@@ -738,9 +805,9 @@ def tutanak_html_olustur(veri: dict) -> str:
         <td>{tarih_saat}</td>
       </tr>
       <tr>
-        <td class="meta-label">Teslim Eden Birim</td>
+        <td class="meta-label">Çıkış / Kaynak Birim</td>
         <td>{gonderen_birim}</td>
-        <td class="meta-label">Teslim Alan Birim</td>
+        <td class="meta-label">Hedef / İşlem Türü</td>
         <td>{alan_birim}</td>
       </tr>
     </table>
@@ -760,7 +827,7 @@ def tutanak_html_olustur(veri: dict) -> str:
     </table>
 
     <div class="note-box">
-      <strong>Açıklama / İrsaliye Bilgisi:</strong> {aciklama}
+      <strong>Açıklama / Gerekçe Bilgisi:</strong> {aciklama}
     </div>
 
     <div class="declaration">
@@ -769,14 +836,14 @@ def tutanak_html_olustur(veri: dict) -> str:
 
     <div class="signatures">
       <div class="sig-box">
-        <div class="sig-title">TESLİM EDEN</div>
+        <div class="sig-title">{sol_imza_baslik}</div>
         <div class="sig-line"><strong>Adı Soyadı:</strong> {teslim_eden_satir}</div>
         <div class="sig-line"><strong>Unvanı:</strong> ...............................................</div>
         <div class="sig-line"><strong>Tarih:</strong> {tarih_saat.split(' ')[0]}</div>
         <div class="sig-line" style="margin-top: 22px;"><strong>İmza:</strong></div>
       </div>
       <div class="sig-box">
-        <div class="sig-title">TESLİM ALAN</div>
+        <div class="sig-title">{sag_imza_baslik}</div>
         <div class="sig-line"><strong>Adı Soyadı:</strong> {teslim_alan_satir}</div>
         <div class="sig-line"><strong>Unvanı:</strong> ...............................................</div>
         <div class="sig-line"><strong>Tarih:</strong> {tarih_saat.split(' ')[0]}</div>
@@ -828,7 +895,7 @@ render_html(
         </div>
         <div>
             <div class="app-title-text">İl-İlçe Stok Takip Sistemi</div>
-            <div class="app-sub-text">İstanbul İl Ana Depo ve 39 İlçe Anlık Malzeme Yönetimi</div>
+            <div class="app-sub-text">İstanbul İl Ana Depo, İlçe Sevk ve Saha Sarf / Zayi Yönetimi</div>
         </div>
     </div>
     """
@@ -857,9 +924,9 @@ ilce_toplam = (
     else 0
 )
 
-col_m1.metric("🏢 İl Ana Depo Toplam", f"{ana_depo_toplam:,}")
-col_m2.metric("📍 İlçeler Toplam", f"{ilce_toplam:,}")
-col_m3.metric("📦 Genel Toplam", f"{ana_depo_toplam + ilce_toplam:,}")
+col_m1.metric("🏢 İl Ana Depo Mevcut", f"{ana_depo_toplam:,}")
+col_m2.metric("📍 İlçeler Kullanılabilir Stok", f"{ilce_toplam:,}")
+col_m3.metric("📦 Genel Mevcut Stok", f"{ana_depo_toplam + ilce_toplam:,}")
 
 with col_aksiyon:
     excel_verisi = excel_olustur(df_stok, df_hareket)
@@ -877,11 +944,12 @@ with col_aksiyon:
 
 st.divider()
 
-sekme_durum, sekme_giris, sekme_cikis, sekme_gecmis = st.tabs(
+sekme_durum, sekme_giris, sekme_cikis, sekme_sarf, sekme_gecmis = st.tabs(
     [
         "📊 Anlık Stok Durumu",
         "📥 İl Ana Depoya Giriş",
         "📤 İlçeye Çıkış Yap",
+        "🩺 İlçe Sarf / Zayi Girişi",
         "📋 Hareket Geçmişi",
     ]
 )
@@ -934,7 +1002,7 @@ with sekme_durum:
                     </div>
                     <div class="prod-meta">
                         <span>Ana Depo: <strong>{ana_adet:,}</strong></span>
-                        <span>İlçeler: <strong>{ilce_adet:,}</strong></span>
+                        <span>İlçeler Net: <strong>{ilce_adet:,}</strong></span>
                     </div>
                     {beden_html}
                 </div>
@@ -1063,7 +1131,6 @@ with sekme_cikis:
         (df_stok["Lokasyon"] == "İl Ana Depo") & (df_stok["Mevcut Adet"] > 0)
     ].copy()
 
-    # Sepette halihazırda bulunan miktarları hesaplayarak kalan sevk edilebilir stoğu bul
     sepetteki_miktarlar = {}
     for k in st.session_state["cikis_sepeti"]:
         anahtar = (k["urun"], k["ozellik"])
@@ -1082,7 +1149,6 @@ with sekme_cikis:
     if ana_depo_stok.empty and not st.session_state["cikis_sepeti"]:
         st.warning("İl Ana Depoda sevk edilebilecek mevcut stok bulunmuyor.")
     else:
-        # 1. Adım: Sepete Ürün Ekleme Alanı
         if not sevk_edilebilir.empty:
             sevk_edilebilir["Etiket"] = (
                 sevk_edilebilir["Ürün"]
@@ -1141,7 +1207,6 @@ with sekme_cikis:
         else:
             st.info("Ana depodaki tüm kullanılabilir ürünler sevk sepetine eklendi.")
 
-        # 2. Adım: Sepet Özeti ve Toplu Onay Formu
         if st.session_state["cikis_sepeti"]:
             st.divider()
             sep_baslik_c1, sep_baslik_c2 = st.columns([4, 1])
@@ -1215,14 +1280,142 @@ with sekme_cikis:
     if "son_cikis_tutanak" in st.session_state:
         tutanak_paneli_goster(st.session_state["son_cikis_tutanak"], "son_cikis_tutanak")
 
-# 4. SEKME: HAREKET GEÇMİŞİ
+# 4. SEKME: İLÇE SARF / ZAYİ GİRİŞİ
+with sekme_sarf:
+    st.caption(
+        f"⏱️ Kayıt zamanı otomatik atanacaktır (Şu an: {simdi_str()}) — İlçelerin saha kullanımlarını ve zayi miktarlarını buradan düşebilirsiniz."
+    )
+
+    ilce_mevcut_stoklar = (
+        df_stok[(df_stok["Lokasyon"] != "İl Ana Depo") & (df_stok["Mevcut Adet"] > 0)].copy()
+        if not df_stok.empty
+        else pd.DataFrame()
+    )
+
+    if ilce_mevcut_stoklar.empty:
+        st.warning("Hiçbir ilçede henüz kullanılabilir stok bulunmuyor. Önce '📤 İlçeye Çıkış Yap' sekmesinden ilçelere sevkiyat yapmalısınız.")
+    else:
+        stoklu_ilceler = sorted(ilce_mevcut_stoklar["Lokasyon"].unique().tolist())
+        s_col1, s_col2 = st.columns(2)
+        sarf_ilce = s_col1.selectbox("İlçe Seçin", stoklu_ilceler, key="sarf_ilce_secim")
+
+        secili_ilce_urunleri = ilce_mevcut_stoklar[
+            ilce_mevcut_stoklar["Lokasyon"] == sarf_ilce
+        ].copy()
+        secili_ilce_urunleri["Etiket"] = (
+            secili_ilce_urunleri["Ürün"]
+            + " | "
+            + secili_ilce_urunleri["Özellik"]
+            + " (İlçe Mevcut: "
+            + secili_ilce_urunleri["Mevcut Adet"].astype(str)
+            + ")"
+        )
+
+        secilen_sarf_etiket = s_col2.selectbox(
+            "Ürün ve Boyut Seçin",
+            secili_ilce_urunleri["Etiket"].tolist(),
+            key="sarf_urun_secim",
+        )
+        sarf_satir = secili_ilce_urunleri[
+            secili_ilce_urunleri["Etiket"] == secilen_sarf_etiket
+        ].iloc[0]
+        ilce_maks_adet = int(sarf_satir["Mevcut Adet"])
+
+        urun_onizleme_karti_goster(
+            sarf_satir["Ürün"],
+            sarf_satir["Özellik"],
+            f"{sarf_ilce} Mevcut Stok: {ilce_maks_adet:,} Adet",
+        )
+
+        # Seçili ilçenin geçmiş kullanım ve zayi özetini küçük bilgi satırı olarak göster
+        ilce_gecmis_sarf = df_hareket[
+            (df_hareket["lokasyon"] == sarf_ilce)
+            & (df_hareket["urun"] == sarf_satir["Ürün"])
+            & (df_hareket["ozellik"] == sarf_satir["Özellik"])
+        ]
+        toplam_kullanilan = int(
+            ilce_gecmis_sarf[ilce_gecmis_sarf["islem_turu"] == "ILCE_KULLANIM"]["adet"].sum()
+        )
+        toplam_zayi = int(
+            ilce_gecmis_sarf[ilce_gecmis_sarf["islem_turu"] == "ILCE_ZAYI"]["adet"].sum()
+        )
+        st.info(
+            f"📌 **{sarf_ilce}** ({sarf_satir['Ürün']} - {sarf_satir['Özellik']}) Toplam Geçmiş: "
+            f"**{toplam_kullanilan:,}** Kullanılan  |  **{toplam_zayi:,}** Zayi"
+        )
+
+        with st.form("ilce_sarf_zayi_form", clear_on_submit=True):
+            f1, f2 = st.columns(2)
+            dusun_turu_secim = f1.radio(
+                "Düşüm Türü",
+                ["Kullanılan (Saha / Tarama Kullanımı)", "Zayi (Kırılma / Bozulma / Miat)"],
+                horizontal=True,
+            )
+            sarf_adet = f2.number_input(
+                "Düşülecek Adet",
+                min_value=1,
+                max_value=ilce_maks_adet,
+                step=1,
+                value=1,
+            )
+
+            sarf_aciklama = st.text_input(
+                "Açıklama / Gerekçe (Zayi işlemlerinde sebep belirtmeniz önerilir)"
+            )
+
+            si1, si2 = st.columns(2)
+            sarf_bildiren = si1.text_input("Tutanak: Bildirimi / Tespiti Yapan (İsteğe bağlı)")
+            sarf_onaylayan = si2.text_input("Tutanak: Birim Sorumlusu / Onaylayan (İsteğe bağlı)")
+
+            if st.form_submit_button("Stoktan Düş ve Kaydet", type="primary"):
+                islem_kodu = (
+                    "ILCE_KULLANIM"
+                    if dusun_turu_secim.startswith("Kullanılan")
+                    else "ILCE_ZAYI"
+                )
+                islem_kisa_ad = "Kullanılan" if islem_kodu == "ILCE_KULLANIM" else "Zayi"
+
+                with st.spinner("İlçe stoğundan düşülüyor..."):
+                    yeni_id, kayit_zamani = hareket_ekle(
+                        islem_kodu,
+                        sarf_ilce,
+                        sarf_satir["Ürün"],
+                        sarf_satir["Özellik"],
+                        sarf_adet,
+                        sarf_aciklama,
+                    )
+                st.session_state["son_sarf_tutanak"] = {
+                    "kayit_no": yeni_id,
+                    "tarih_saat": kayit_zamani,
+                    "islem_turu": islem_kodu,
+                    "lokasyon": sarf_ilce,
+                    "kalemler": [
+                        {
+                            "urun": sarf_satir["Ürün"],
+                            "ozellik": sarf_satir["Özellik"],
+                            "adet": sarf_adet,
+                        }
+                    ],
+                    "aciklama": sarf_aciklama,
+                    "teslim_eden": sarf_bildiren,
+                    "teslim_alan": sarf_onaylayan,
+                }
+                st.success(
+                    f"{sarf_ilce} stoğundan {sarf_adet:,} adet {sarf_satir['Ürün']} ({sarf_satir['Özellik']}) [{islem_kisa_ad}] olarak düşüldü."
+                )
+                st.rerun()
+
+    if "son_sarf_tutanak" in st.session_state:
+        tutanak_paneli_goster(st.session_state["son_sarf_tutanak"], "son_sarf_tutanak")
+
+# 5. SEKME: HAREKET GEÇMİŞİ
 with sekme_gecmis:
     if df_hareket.empty:
         st.info("Henüz işlem kaydı yok.")
     else:
         df_goster_log = df_hareket.copy()
         df_goster_log["islem_turu"] = df_goster_log["islem_turu"].map(
-            {"ANA_DEPO_GIRIS": "İl Ana Depo Giriş", "ILCE_CIKIS": "İlçeye Çıkış"}
+            lambda x: ISLEM_ETIKETLERI.get(x, x)
         )
         st.dataframe(
             df_goster_log.rename(
@@ -1246,7 +1439,6 @@ with sekme_gecmis:
             secilen_no = st.selectbox("Tutanak Yazdırılacak Kayıt No", kayit_nolar)
             satir = df_hareket[df_hareket["id"] == secilen_no].iloc[0]
 
-            # Aynı saniyede aynı ilçeye toplu çıkış yapıldıysa tüm kalemleri birlikte getir
             ayni_sevkiyat = df_hareket[
                 (df_hareket["tarih_saat"] == satir["tarih_saat"])
                 & (df_hareket["islem_turu"] == satir["islem_turu"])
