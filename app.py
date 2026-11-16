@@ -841,8 +841,6 @@ stil_uygula()
 if "cikis_sepeti" not in st.session_state:
     st.session_state["cikis_sepeti"] = []
 
-st.title("📦 Stok Takip Sistemi")
-
 try:
     df_hareket, aktif_ilceler = verileri_getir()
 except Exception as e:
@@ -854,23 +852,11 @@ except Exception as e:
 
 df_stok = anlik_stok_hesapla(df_hareket)
 
-col_m1, col_m2, col_m3, col_aksiyon = st.columns([2, 2, 2, 2])
-ana_depo_toplam = (
-    int(df_stok[df_stok["Lokasyon"] == "İl Ana Depo"]["Mevcut Adet"].sum())
-    if not df_stok.empty
-    else 0
-)
-ilce_toplam = (
-    int(df_stok[df_stok["Lokasyon"] != "İl Ana Depo"]["Mevcut Adet"].sum())
-    if not df_stok.empty
-    else 0
-)
+col_baslik, col_excel, col_yenile = st.columns([6, 2, 1.5])
+col_baslik.title("📦 Stok Takip Sistemi")
 
-col_m1.metric("İl Ana Depo", f"{ana_depo_toplam:,}")
-col_m2.metric("İlçeler Toplam", f"{ilce_toplam:,}")
-col_m3.metric("Genel Toplam", f"{ana_depo_toplam + ilce_toplam:,}")
-
-with col_aksiyon:
+with col_excel:
+    st.write("")
     excel_verisi = excel_olustur(df_stok, df_hareket)
     dosya_adi = f"stok_raporu_{datetime.now(TZ).strftime('%Y%m%d_%H%M')}.xlsx"
     st.download_button(
@@ -880,6 +866,9 @@ with col_aksiyon:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
+
+with col_yenile:
+    st.write("")
     if st.button("🔄 Yenile", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
