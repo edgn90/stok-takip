@@ -157,32 +157,74 @@ def stil_uygula():
             justify-content: center;
             flex-shrink: 0;
         }
-        .table-prod-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            border: 1px solid rgba(128, 128, 128, 0.22);
-            border-radius: 10px;
-            padding: 9px 12px;
-            margin-bottom: 10px;
+        .stok-tablo-wrap {
+            width: 100%;
+            overflow-x: auto;
+            border: 1px solid rgba(128, 128, 128, 0.25);
+            border-radius: 12px;
+            margin-bottom: 14px;
         }
-        .table-prod-icon {
+        .stok-tablo {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        .stok-tablo thead th {
+            background: rgba(128, 128, 128, 0.08);
+            border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+            border-right: 1px solid rgba(128, 128, 128, 0.15);
+            padding: 12px 14px;
+            text-align: center;
+            vertical-align: middle;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .stok-tablo thead th:first-child {
+            text-align: left;
+            min-width: 170px;
+        }
+        .stok-tablo thead th:last-child,
+        .stok-tablo tbody td:last-child {
+            border-right: none;
+        }
+        .th-urun-kutu {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+        }
+        .th-ikon-daire {
             width: 34px;
             height: 34px;
-            border-radius: 8px;
+            border-radius: 9px;
             display: flex;
             align-items: center;
             justify-content: center;
-            flex-shrink: 0;
         }
-        .table-prod-title {
-            font-size: 13.5px;
+        .stok-tablo tbody td {
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(128, 128, 128, 0.14);
+            border-right: 1px solid rgba(128, 128, 128, 0.12);
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+        .stok-tablo tbody td:first-child {
+            text-align: left;
+            font-weight: 600;
+        }
+        .stok-tablo tbody tr:last-child td {
+            border-bottom: none;
+        }
+        .stok-tablo tbody tr.ana-depo-satir {
+            background: rgba(79, 70, 229, 0.07);
             font-weight: 700;
-            line-height: 1.25;
         }
-        .table-prod-sub {
-            font-size: 11.5px;
-            opacity: 0.75;
+        .stok-tablo tbody tr.ana-depo-satir td {
+            border-bottom: 2px solid rgba(128, 128, 128, 0.25);
+        }
+        .stok-tablo tbody tr:hover {
+            background: rgba(128, 128, 128, 0.05);
         }
         .preview-banner {
             display: flex;
@@ -248,34 +290,51 @@ def urun_onizleme_karti_goster(urun_adi: str, ozellik: str, stok_bilgisi: str):
     )
 
 
-def tablo_ustu_urun_vektorleri_goster(ekstra_urunler: list[str] | None = None):
-    """Tablonun hemen üstünde yer alan ürün vektör başlıkları."""
-    urun_listesi = list(URUN_KATALOGU.keys())
-    if ekstra_urunler:
-        for u in ekstra_urunler:
-            if u not in urun_listesi:
-                urun_listesi.append(u)
+def sade_stok_tablosu_goster(df_ozet: pd.DataFrame):
+    """İlk (başlık) satırında ürün vektör ikonları ve ürün adları bulunan sade stok tablosu."""
+    sutunlar = list(df_ozet.columns)
+    baslik_hucreleri = []
 
-    kolonlar = st.columns(len(urun_listesi))
-    for idx, urun_adi in enumerate(urun_listesi):
-        gorsel = urun_gorsel_bilgisi(urun_adi, boyut=20)
-        ozellikler = URUN_KATALOGU.get(urun_adi, ["Standart"])
-        alt_yazi = f"Boyutlar: {' / '.join(ozellikler)}" if len(ozellikler) > 1 else "Standart"
-
-        with kolonlar[idx]:
-            render_html(
+    for col in sutunlar:
+        if col == "Lokasyon":
+            baslik_hucreleri.append("<th>Lokasyon</th>")
+        else:
+            temel_urun = col.split(" (")[0]
+            gorsel = urun_gorsel_bilgisi(temel_urun, boyut=20)
+            baslik_hucreleri.append(
                 f"""
-                <div class="table-prod-header">
-                    <div class="table-prod-icon" style="background: {gorsel['bg']};">
-                        {gorsel['svg']}
+                <th>
+                    <div class="th-urun-kutu">
+                        <span class="th-ikon-daire" style="background: {gorsel['bg']};">{gorsel['svg']}</span>
+                        <span style="color: {gorsel['renk']};">{html.escape(col)}</span>
                     </div>
-                    <div>
-                        <div class="table-prod-title" style="color: {gorsel['renk']};">{html.escape(urun_adi)}</div>
-                        <div class="table-prod-sub">{html.escape(alt_yazi)}</div>
-                    </div>
-                </div>
+                </th>
                 """
             )
+
+    govde_satirlari = []
+    for _, row in df_ozet.iterrows():
+        lok = str(row["Lokasyon"])
+        satir_sinifi = ' class="ana-depo-satir"' if lok == "İl Ana Depo" else ""
+        hucreler = [f"<td>{html.escape(lok)}</td>"]
+        for col in sutunlar[1:]:
+            deger = int(row[col])
+            hucreler.append(f"<td>{deger:,}</td>")
+        govde_satirlari.append(f"<tr{satir_sinifi}>{''.join(hucreler)}</tr>")
+
+    tablo_html = f"""
+    <div class="stok-tablo-wrap">
+        <table class="stok-tablo">
+            <thead>
+                <tr>{''.join(baslik_hucreleri)}</tr>
+            </thead>
+            <tbody>
+                {''.join(govde_satirlari)}
+            </tbody>
+        </table>
+    </div>
+    """
+    render_html(tablo_html)
 
 
 @st.cache_resource
@@ -957,18 +1016,13 @@ sekme_durum, sekme_giris, sekme_cikis, sekme_sarf, sekme_gecmis = st.tabs(
     ]
 )
 
-# 1. SEKME: SADE STOK DURUMU (TABLO ÜSTÜNDE ÜRÜN VEKTÖRLERİ İLE)
+# 1. SEKME: SADE STOK DURUMU (BAŞLIK SATIRINDA ÜRÜN İKONLARI VE İSİMLERİ)
 with sekme_durum:
-    ekstra_urun_listesi = (
-        sorted(df_stok["Ürün"].unique().tolist()) if not df_stok.empty else None
-    )
-    tablo_ustu_urun_vektorleri_goster(ekstra_urun_listesi)
-
     if df_stok.empty:
         st.info("Henüz stok hareketi bulunmuyor.")
     else:
         df_ozet = sade_stok_ozeti_olustur(df_stok)
-        st.dataframe(df_ozet, use_container_width=True, hide_index=True)
+        sade_stok_tablosu_goster(df_ozet)
 
         st.download_button(
             label="📥 Ayrıntılı Excel Raporu İndir (.xlsx)",
