@@ -524,13 +524,17 @@ def tutanak_html_olustur(veri: dict) -> str:
         ]
 
     satirlar_html = []
-    toplam_adet = 0
+    spekulum_kalemleri = []
+
     for idx, k in enumerate(kalemler, start=1):
         u_ham = str(k.get("urun", "-"))
         u_esc = html.escape(u_ham)
         oz_esc = html.escape(str(k.get("ozellik", "-")))
         ad_int = int(k.get("adet", 0))
-        toplam_adet += ad_int
+
+        if u_ham.strip().lower() == "spekulum":
+            spekulum_kalemleri.append(k)
+
         u_svg = urun_gorsel_bilgisi(u_ham, boyut=18)["svg"]
         satirlar_html.append(
             f"""
@@ -543,12 +547,21 @@ def tutanak_html_olustur(veri: dict) -> str:
             """
         )
 
-    if len(kalemler) > 1:
+    # Farklı ürünler birbirine toplanmaz; yalnızca Spekulum'da birden fazla beden (S/M/L) varsa alt toplam gösterilir
+    if len(spekulum_kalemleri) > 1:
+        spekulum_toplam = sum(int(x.get("adet", 0)) for x in spekulum_kalemleri)
+        beden_sirasi = {"S": 0, "M": 1, "L": 2}
+        beden_etiket = "-".join(
+            sorted(
+                {str(x.get("ozellik", "")).strip() for x in spekulum_kalemleri},
+                key=lambda b: beden_sirasi.get(b, 99),
+            )
+        )
         satirlar_html.append(
             f"""
             <tr style="background: #f2f4f7;">
-              <td colspan="3" style="text-align: right;"><strong>GENEL TOPLAM ({len(kalemler)} Kalem):</strong></td>
-              <td><strong>{toplam_adet:,} Adet</strong></td>
+              <td colspan="3" style="text-align: right;"><strong>Spekulum Toplamı ({html.escape(beden_etiket)}):</strong></td>
+              <td><strong>{spekulum_toplam:,} Adet</strong></td>
             </tr>
             """
         )
@@ -896,7 +909,8 @@ with sekme_durum:
             ana_adet = int(u_df[u_df["Lokasyon"] == "İl Ana Depo"]["Mevcut Adet"].sum())
             ilce_adet = int(u_df[u_df["Lokasyon"] != "İl Ana Depo"]["Mevcut Adet"].sum())
 
-        toplam_urun = ana_adet + ilce_adet
+        # Sadece aynı ürünün (Spekulum'un S-M-L bedenleri gibi) kendi içindeki toplamı hesaplanır
+        urun_kendi_toplami = ana_adet + ilce_adet
 
         beden_html = ""
         if len(ozellikler) > 1:
@@ -926,7 +940,7 @@ with sekme_durum:
                         </div>
                         <div>
                             <div class="prod-name">{html.escape(urun_adi)}</div>
-                            <div class="prod-total" style="color: {gorsel['renk']};">{toplam_urun:,}</div>
+                            <div class="prod-total" style="color: {gorsel['renk']};">{urun_kendi_toplami:,}</div>
                         </div>
                     </div>
                     <div class="prod-meta">
@@ -1120,10 +1134,17 @@ with sekme_cikis:
         if st.session_state["cikis_sepeti"]:
             st.divider()
             sep_baslik_c1, sep_baslik_c2 = st.columns([4, 1])
-            toplam_sepet_adet = sum(x["adet"] for x in st.session_state["cikis_sepeti"])
-            sep_baslik_c1.subheader(
-                f"🛒 Sevk Sepeti ({len(st.session_state['cikis_sepeti'])} Kalem / {toplam_sepet_adet:,} Adet)"
-            )
+            spekulum_sepet_kalemleri = [
+                x
+                for x in st.session_state["cikis_sepeti"]
+                if x["urun"].strip().lower() == "spekulum"
+            ]
+            sepet_baslik = f"🛒 Sevk Sepeti ({len(st.session_state['cikis_sepeti'])} Kalem)"
+            if len(spekulum_sepet_kalemleri) > 1:
+                spekulum_sepet_toplam = sum(int(x["adet"]) for x in spekulum_sepet_kalemleri)
+                sepet_baslik += f" — Spekulum Toplamı: {spekulum_sepet_toplam:,} Adet"
+
+            sep_baslik_c1.subheader(sepet_baslik)
             if sep_baslik_c2.button("Temizle", use_container_width=True):
                 st.session_state["cikis_sepeti"] = []
                 st.rerun()
@@ -1176,7 +1197,7 @@ with sekme_cikis:
                         "aciklama": cikis_aciklama,
                     }
                     st.session_state["cikis_sepeti"] = []
-                    st.success(f"{hedef_ilce} ilçesine {toplam_sepet_adet:,} adet çıkış yapıldı.")
+                    st.success(f"{hedef_ilce} ilçesine {len(sepet_kopya)} kalem ürün çıkışı yapıldı.")
                     st.rerun()
 
     if "son_cikis_tutanak" in st.session_state:
