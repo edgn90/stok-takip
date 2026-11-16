@@ -21,7 +21,6 @@ HAREKET_BASLIKLAR = [
     "aciklama",
 ]
 
-# Tanımlı Ürün Kataloğu ve Özellik/Boyut Seçenekleri
 URUN_KATALOGU = {
     "HPV DNA Testi": ["Standart"],
     "Spekulum": ["S", "M", "L"],
@@ -112,7 +111,9 @@ def verileri_getir() -> tuple[pd.DataFrame, list[str]]:
         [[ilce] for ilce in ISTANBUL_ILCELERI],
     )
 
-    kayitlar = ws_hareket.get_all_records()
+    ham_kayitlar = ws_hareket.get_all_records()
+    kayitlar = [k for k in ham_kayitlar if str(k.get("urun", "")).strip()]
+
     if not kayitlar:
         df = pd.DataFrame(columns=HAREKET_BASLIKLAR)
     else:
@@ -163,17 +164,6 @@ def hareket_ekle(
     ]
     ws.append_row(yeni_satir, value_input_option="USER_ENTERED")
     st.cache_data.clear()
-
-
-def hareket_sil(hareket_id: int) -> bool:
-    sh = get_spreadsheet()
-    ws = get_or_create_worksheet(sh, "hareketler", HAREKET_BASLIKLAR)
-    cell = ws.find(str(hareket_id), in_column=1)
-    if cell and cell.row > 1:
-        ws.delete_rows(cell.row)
-        st.cache_data.clear()
-        return True
-    return False
 
 
 def anlik_stok_hesapla(df_hareket: pd.DataFrame) -> pd.DataFrame:
@@ -450,14 +440,3 @@ with sekme_gecmis:
             use_container_width=True,
             hide_index=True,
         )
-
-        with st.expander("Hatalı Kayıt Sil"):
-            silinecek_id = st.number_input("Silinecek Kayıt No", min_value=1, step=1)
-            if st.button("Kaydı Sil"):
-                with st.spinner("Kayıt siliniyor..."):
-                    silindi = hareket_sil(int(silinecek_id))
-                if silindi:
-                    st.warning(f"{silinecek_id} numaralı kayıt silindi.")
-                    st.rerun()
-                else:
-                    st.error(f"{silinecek_id} numaralı kayıt bulunamadı.")
