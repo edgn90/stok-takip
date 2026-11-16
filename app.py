@@ -157,6 +157,30 @@ def stil_uygula():
             justify-content: center;
             flex-shrink: 0;
         }
+        .legend-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .legend-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid rgba(128, 128, 128, 0.22);
+            border-radius: 10px;
+            padding: 6px 12px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .legend-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
         .preview-banner {
             display: flex;
             align-items: center;
@@ -219,6 +243,22 @@ def urun_onizleme_karti_goster(urun_adi: str, ozellik: str, stok_bilgisi: str):
         </div>
         """
     )
+
+
+def stok_urun_seridi_goster():
+    etiketler = []
+    for urun_adi, ozellikler in URUN_KATALOGU.items():
+        gorsel = urun_gorsel_bilgisi(urun_adi, boyut=18)
+        alt_bilgi = f" ({'-'.join(ozellikler)})" if len(ozellikler) > 1 else ""
+        etiketler.append(
+            f"""
+            <div class="legend-chip">
+                <span class="legend-icon" style="background: {gorsel['bg']};">{gorsel['svg']}</span>
+                <span>{html.escape(urun_adi)}{html.escape(alt_bilgi)}</span>
+            </div>
+            """
+        )
+    render_html(f'<div class="legend-strip">{"".join(etiketler)}</div>')
 
 
 @st.cache_resource
@@ -406,14 +446,13 @@ def anlik_stok_hesapla(df_hareket: pd.DataFrame) -> pd.DataFrame:
     return df_stok.sort_values(by=["Lokasyon", "Ürün", "Özellik"]).reset_index(drop=True)
 
 
-def sade_stok_ozeti_olustur(df_stok: pd.DataFrame, aktif_ilceler: list[str]) -> pd.DataFrame:
+def sade_stok_ozeti_olustur(df_stok: pd.DataFrame) -> pd.DataFrame:
     """İl Ana Depo ve ilçelerin elindeki mevcut stokları sade bir özet tablo haline getirir."""
     temel_sutunlar = [
         "HPV DNA Testi",
         "Spekulum (S)",
         "Spekulum (M)",
         "Spekulum (L)",
-        "Spekulum Toplam (S-M-L)",
         "Kargo Poşeti",
     ]
 
@@ -436,26 +475,14 @@ def sade_stok_ozeti_olustur(df_stok: pd.DataFrame, aktif_ilceler: list[str]) -> 
         fill_value=0,
     )
 
-    # Bilinen temel sütunların eksiksiz yer almasını sağla
-    for col in [
-        "HPV DNA Testi",
-        "Spekulum (S)",
-        "Spekulum (M)",
-        "Spekulum (L)",
-        "Kargo Poşeti",
-    ]:
+    for col in temel_sutunlar:
         if col not in pivot.columns:
             pivot[col] = 0
-
-    pivot["Spekulum Toplam (S-M-L)"] = (
-        pivot["Spekulum (S)"] + pivot["Spekulum (M)"] + pivot["Spekulum (L)"]
-    )
 
     ekstra_sutunlar = [c for c in pivot.columns if c not in temel_sutunlar]
     sirali_sutunlar = temel_sutunlar + ekstra_sutunlar
     pivot = pivot[sirali_sutunlar]
 
-    # İl Ana Depo her zaman en üstte, ardından stok hareketi olan veya kayıtlı ilçeler alfabetik
     diger_lokasyonlar = sorted([lok for lok in pivot.index if lok != "İl Ana Depo"])
     if "İl Ana Depo" in pivot.index:
         sirali_indeks = ["İl Ana Depo"] + diger_lokasyonlar
@@ -915,10 +942,12 @@ sekme_durum, sekme_giris, sekme_cikis, sekme_sarf, sekme_gecmis = st.tabs(
 
 # 1. SEKME: SADE STOK DURUMU (İL ANA DEPO VE İLÇELER)
 with sekme_durum:
+    stok_urun_seridi_goster()
+
     if df_stok.empty:
         st.info("Henüz stok hareketi bulunmuyor.")
     else:
-        df_ozet = sade_stok_ozeti_olustur(df_stok, aktif_ilceler)
+        df_ozet = sade_stok_ozeti_olustur(df_stok)
         st.dataframe(df_ozet, use_container_width=True, hide_index=True)
 
         st.download_button(
