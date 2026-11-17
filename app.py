@@ -36,6 +36,14 @@ URUN_KATALOGU = {
     "Kargo Poşeti": ["Standart"],
 }
 
+STANDART_KALEMLER = [
+    ("HPV DNA Testi", "Standart"),
+    ("Spekulum", "S"),
+    ("Spekulum", "M"),
+    ("Spekulum", "L"),
+    ("Kargo Poşeti", "Standart"),
+]
+
 ISTANBUL_ILCELERI = [
     "Adalar",
     "Arnavutköy",
@@ -226,6 +234,21 @@ def stil_uygula():
         .stok-tablo tbody tr:hover {
             background: rgba(128, 128, 128, 0.05);
         }
+        .bulk-item-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 0;
+        }
+        .bulk-item-title {
+            font-size: 14.5px;
+            font-weight: 700;
+            line-height: 1.25;
+        }
+        .bulk-item-sub {
+            font-size: 12px;
+            opacity: 0.78;
+        }
         .preview-banner {
             display: flex;
             align-items: center;
@@ -247,15 +270,6 @@ def stil_uygula():
             padding: 4px 10px;
             border-radius: 8px;
             background: rgba(128, 128, 128, 0.12);
-        }
-        .cart-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border: 1px solid rgba(128, 128, 128, 0.2);
-            border-radius: 10px;
-            padding: 8px 14px;
-            margin-bottom: 6px;
         }
         .stTabs [data-baseweb="tab"] {
             padding: 9px 14px;
@@ -433,7 +447,8 @@ def hareket_ekle(
     return yeni_id, kayit_zamani
 
 
-def toplu_ilce_cikis_ekle(
+def toplu_hareket_ekle(
+    islem_turu: str,
     lokasyon: str,
     kalemler: list[dict],
     aciklama: str = "",
@@ -453,7 +468,7 @@ def toplu_ilce_cikis_ekle(
             [
                 kayit_id,
                 kayit_zamani,
-                "ILCE_CIKIS",
+                islem_turu,
                 lokasyon.strip(),
                 kalem["urun"].strip(),
                 kalem["ozellik"].strip(),
@@ -967,11 +982,13 @@ def tutanak_paneli_goster(tutanak_verisi: dict, session_key: str | None = None):
     components.html(html_kod, height=dinamik_yukseklik, scrolling=True)
 
 
+def key_olustur(on_ek: str, urun: str, ozellik: str) -> str:
+    temiz = f"{urun}_{ozellik}".replace(" ", "_").replace("(", "").replace(")", "")
+    return f"{on_ek}_{temiz}"
+
+
 # --- UYGULAMA ARAYÜZÜ ---
 stil_uygula()
-
-if "cikis_sepeti" not in st.session_state:
-    st.session_state["cikis_sepeti"] = []
 
 try:
     df_hareket, aktif_ilceler = verileri_getir()
@@ -1016,7 +1033,7 @@ sekme_durum, sekme_giris, sekme_cikis, sekme_sarf, sekme_gecmis = st.tabs(
     ]
 )
 
-# 1. SEKME: SADE STOK DURUMU (BAŞLIK SATIRINDA ÜRÜN İKONLARI VE İSİMLERİ)
+# 1. SEKME: SADE STOK DURUMU
 with sekme_durum:
     if df_stok.empty:
         st.info("Henüz stok hareketi bulunmuyor.")
@@ -1032,213 +1049,330 @@ with sekme_durum:
             key="sekme_excel_indir",
         )
 
-# 2. SEKME: İL ANA DEPOYA GİRİŞ
+# 2. SEKME: İL ANA DEPOYA TOPLU GİRİŞ + HIZLI ADET BUTONLARI
 with sekme_giris:
-    secenek_listesi = list(URUN_KATALOGU.keys()) + ["+ Yeni Ürün"]
-    c_u1, c_u2 = st.columns(2)
-    secilen_urun_tipi = c_u1.selectbox("Ürün", secenek_listesi)
+    # Mevcut ekstra ürünler varsa onları da listeye dahil et
+    giris_kalem_listesi = list(STANDART_KALEMLER)
+    if not df_stok.empty:
+        for _, r in df_stok[["Ürün", "Özellik"]].drop_duplicates().iterrows():
+            cift = (r["Ürün"], r["Özellik"])
+            if cift not in giris_kalem_listesi:
+                giris_kalem_listesi.append(cift)
 
-    if secilen_urun_tipi == "+ Yeni Ürün":
-        final_urun = c_u1.text_input("Yeni Ürün Adı")
-        final_ozellik = c_u2.text_input("Özellik / Boyut", value="Standart")
-    else:
-        final_urun = secilen_urun_tipi
-        ozellik_listesi = URUN_KATALOGU[secilen_urun_tipi]
-        if len(ozellik_listesi) > 1:
-            final_ozellik = c_u2.selectbox("Boyut", ozellik_listesi)
-        else:
-            final_ozellik = ozellik_listesi[0]
-            c_u2.text_input("Özellik", value=final_ozellik, disabled=True)
+    # Gönderim sonrası sıfırlama bayrağı
+    if st.session_state.pop("giris_sifirla_istegi", False):
+        for urun_adi, ozellik in giris_kalem_listesi:
+            st.session_state[key_olustur("giris_qty", urun_adi, ozellik)] = 0
+        st.session_state["giris_yeni_urun_ad"] = ""
+        st.session_state["giris_yeni_urun_ozellik"] = "Standart"
+        st.session_state["giris_yeni_urun_adet"] = 0
+        st.session_state["giris_aciklama_input"] = ""
 
-    temiz_onizleme_urun = final_urun.strip() or "Yeni Ürün"
-    temiz_onizleme_ozellik = final_ozellik.strip() or "Standart"
-    mevcut_ana_stok = (
-        int(
-            df_stok[
-                (df_stok["Lokasyon"] == "İl Ana Depo")
-                & (df_stok["Ürün"] == temiz_onizleme_urun)
-                & (df_stok["Özellik"] == temiz_onizleme_ozellik)
-            ]["Mevcut Adet"].sum()
+    st.caption("Giriş yapmak istediğiniz ürünlerin yanına adet yazın veya hızlı butonları kullanın.")
+
+    for urun_adi, ozellik in giris_kalem_listesi:
+        w_key = key_olustur("giris_qty", urun_adi, ozellik)
+        if w_key not in st.session_state:
+            st.session_state[w_key] = 0
+
+        mevcut_ana = (
+            int(
+                df_stok[
+                    (df_stok["Lokasyon"] == "İl Ana Depo")
+                    & (df_stok["Ürün"] == urun_adi)
+                    & (df_stok["Özellik"] == ozellik)
+                ]["Mevcut Adet"].sum()
+            )
+            if not df_stok.empty
+            else 0
         )
-        if not df_stok.empty
-        else 0
+
+        gorsel = urun_gorsel_bilgisi(urun_adi, boyut=22)
+        etiket_baslik = (
+            urun_adi if ozellik in ("", "Standart") else f"{urun_adi} ({ozellik})"
+        )
+
+        col_bilgi, col_input, col_b1, col_b2, col_b3, col_b4 = st.columns(
+            [3.2, 1.6, 0.9, 0.9, 1.0, 0.8]
+        )
+
+        with col_bilgi:
+            render_html(
+                f"""
+                <div class="bulk-item-box">
+                    <div class="prod-icon-wrap" style="background: {gorsel['bg']};">
+                        {gorsel['svg']}
+                    </div>
+                    <div>
+                        <div class="bulk-item-title">{html.escape(etiket_baslik)}</div>
+                        <div class="bulk-item-sub">Ana Depo Mevcut: <strong>{mevcut_ana:,}</strong></div>
+                    </div>
+                </div>
+                """
+            )
+
+        with col_input:
+            st.number_input(
+                "Adet",
+                min_value=0,
+                step=1,
+                key=w_key,
+                label_visibility="collapsed",
+            )
+
+        with col_b1:
+            if st.button("+50", key=f"{w_key}_p50", use_container_width=True):
+                st.session_state[w_key] += 50
+                st.rerun()
+
+        with col_b2:
+            if st.button("+100", key=f"{w_key}_p100", use_container_width=True):
+                st.session_state[w_key] += 100
+                st.rerun()
+
+        with col_b3:
+            if st.button("+500", key=f"{w_key}_p500", use_container_width=True):
+                st.session_state[w_key] += 500
+                st.rerun()
+
+        with col_b4:
+            if st.button("0", key=f"{w_key}_rst", use_container_width=True):
+                st.session_state[w_key] = 0
+                st.rerun()
+
+    with st.expander("➕ Listede Olmayan Yeni Ürün Ekle"):
+        ny_c1, ny_c2, ny_c3 = st.columns([2, 1.5, 1])
+        ny_c1.text_input("Yeni Ürün Adı", key="giris_yeni_urun_ad")
+        ny_c2.text_input("Özellik / Boyut", value="Standart", key="giris_yeni_urun_ozellik")
+        ny_c3.number_input("Adet", min_value=0, step=1, value=0, key="giris_yeni_urun_adet")
+
+    st.divider()
+    g_alt1, g_alt2 = st.columns([2.5, 1.5])
+    giris_aciklama = g_alt1.text_input(
+        "Açıklama / İrsaliye No (İsteğe bağlı)",
+        key="giris_aciklama_input",
     )
-    urun_onizleme_karti_goster(
-        temiz_onizleme_urun,
-        temiz_onizleme_ozellik,
-        f"Ana Depo Mevcut: {mevcut_ana_stok:,}",
+
+    toplam_girilecek_kalem = sum(
+        1
+        for urun_adi, ozellik in giris_kalem_listesi
+        if st.session_state.get(key_olustur("giris_qty", urun_adi, ozellik), 0) > 0
     )
+    if (
+        st.session_state.get("giris_yeni_urun_ad", "").strip()
+        and st.session_state.get("giris_yeni_urun_adet", 0) > 0
+    ):
+        toplam_girilecek_kalem += 1
 
-    with st.form("ana_depo_giris_form", clear_on_submit=True):
-        c1, c2 = st.columns([1, 2])
-        giris_adet = c1.number_input("Adet", min_value=1, step=1, value=1)
-        giris_aciklama = c2.text_input("Açıklama / İrsaliye No (İsteğe bağlı)")
+    with g_alt2:
+        st.write("")
+        buton_etiket = (
+            f"Kaydet ve Tutanak Oluştur ({toplam_girilecek_kalem} Kalem)"
+            if toplam_girilecek_kalem > 0
+            else "Kaydet ve Tutanak Oluştur"
+        )
+        if st.button(buton_etiket, type="primary", use_container_width=True, key="btn_toplu_giris"):
+            girilecek_kalemler = []
+            for urun_adi, ozellik in giris_kalem_listesi:
+                miktar = int(st.session_state.get(key_olustur("giris_qty", urun_adi, ozellik), 0))
+                if miktar > 0:
+                    girilecek_kalemler.append(
+                        {"urun": urun_adi, "ozellik": ozellik, "adet": miktar}
+                    )
 
-        if st.form_submit_button("Kaydet ve Tutanak Oluştur", type="primary"):
-            temiz_urun = final_urun.strip()
-            temiz_ozellik = final_ozellik.strip() if final_ozellik.strip() else "Standart"
+            yeni_u_ad = st.session_state.get("giris_yeni_urun_ad", "").strip()
+            yeni_u_oz = st.session_state.get("giris_yeni_urun_ozellik", "").strip() or "Standart"
+            yeni_u_ad_miktar = int(st.session_state.get("giris_yeni_urun_adet", 0))
+            if yeni_u_ad and yeni_u_ad_miktar > 0:
+                girilecek_kalemler.append(
+                    {"urun": yeni_u_ad, "ozellik": yeni_u_oz, "adet": yeni_u_ad_miktar}
+                )
 
-            if not temiz_urun:
-                st.error("Ürün adı boş bırakılamaz.")
+            if not girilecek_kalemler:
+                st.error("En az bir ürün için 0'dan büyük adet girmelisiniz.")
             else:
                 with st.spinner("Kaydediliyor..."):
-                    yeni_id, kayit_zamani = hareket_ekle(
+                    eklenen_idler, kayit_zamani = toplu_hareket_ekle(
                         "ANA_DEPO_GIRIS",
                         "İl Ana Depo",
-                        temiz_urun,
-                        temiz_ozellik,
-                        giris_adet,
+                        girilecek_kalemler,
                         giris_aciklama,
                     )
+                kayit_no_etiket = (
+                    str(eklenen_idler[0])
+                    if len(eklenen_idler) == 1
+                    else f"{eklenen_idler[0]} - {eklenen_idler[-1]}"
+                )
                 st.session_state["son_giris_tutanak"] = {
-                    "kayit_no": yeni_id,
+                    "kayit_no": kayit_no_etiket,
                     "tarih_saat": kayit_zamani,
                     "islem_turu": "ANA_DEPO_GIRIS",
                     "lokasyon": "İl Ana Depo",
-                    "kalemler": [
-                        {
-                            "urun": temiz_urun,
-                            "ozellik": temiz_ozellik,
-                            "adet": giris_adet,
-                        }
-                    ],
+                    "kalemler": girilecek_kalemler,
                     "aciklama": giris_aciklama,
                 }
-                st.success(f"{temiz_urun} ({temiz_ozellik}) - {giris_adet} adet eklendi.")
+                st.session_state["giris_sifirla_istegi"] = True
+                st.success(f"İl Ana Depoya {len(girilecek_kalemler)} kalem ürün girişi kaydedildi.")
                 st.rerun()
 
     if "son_giris_tutanak" in st.session_state:
         tutanak_paneli_goster(st.session_state["son_giris_tutanak"], "son_giris_tutanak")
 
-# 3. SEKME: İLÇEYE ÇIKIŞ
+# 3. SEKME: İLÇEYE TOPLU ÇIKIŞ + HIZLI ADET BUTONLARI
 with sekme_cikis:
-    ana_depo_stok = df_stok[
-        (df_stok["Lokasyon"] == "İl Ana Depo") & (df_stok["Mevcut Adet"] > 0)
-    ].copy()
+    ana_depo_stok = (
+        df_stok[(df_stok["Lokasyon"] == "İl Ana Depo") & (df_stok["Mevcut Adet"] > 0)].copy()
+        if not df_stok.empty
+        else pd.DataFrame()
+    )
 
-    sepetteki_miktarlar = {}
-    for k in st.session_state["cikis_sepeti"]:
-        anahtar = (k["urun"], k["ozellik"])
-        sepetteki_miktarlar[anahtar] = sepetteki_miktarlar.get(anahtar, 0) + int(k["adet"])
-
-    if not ana_depo_stok.empty:
-        ana_depo_stok["Kalan_Stok"] = ana_depo_stok.apply(
-            lambda r: int(r["Mevcut Adet"])
-            - sepetteki_miktarlar.get((r["Ürün"], r["Özellik"]), 0),
-            axis=1,
-        )
-        sevk_edilebilir = ana_depo_stok[ana_depo_stok["Kalan_Stok"] > 0].copy()
-    else:
-        sevk_edilebilir = pd.DataFrame()
-
-    if ana_depo_stok.empty and not st.session_state["cikis_sepeti"]:
+    if ana_depo_stok.empty:
         st.warning("İl Ana Depoda sevk edilebilecek stok bulunmuyor.")
     else:
-        if not sevk_edilebilir.empty:
-            sevk_edilebilir["Etiket"] = (
-                sevk_edilebilir["Ürün"]
-                + " | "
-                + sevk_edilebilir["Özellik"]
-                + " (Mevcut: "
-                + sevk_edilebilir["Kalan_Stok"].astype(str)
-                + ")"
+        # Standart sırayı koruyarak mevcut stoklu kalemleri sırala
+        mevcut_harita = {
+            (r["Ürün"], r["Özellik"]): int(r["Mevcut Adet"])
+            for _, r in ana_depo_stok.iterrows()
+        }
+        cikis_kalem_listesi = [
+            (u, oz, mevcut_harita[(u, oz)])
+            for u, oz in STANDART_KALEMLER
+            if (u, oz) in mevcut_harita
+        ]
+        for (u, oz), mikt in mevcut_harita.items():
+            if (u, oz) not in STANDART_KALEMLER:
+                cikis_kalem_listesi.append((u, oz, mikt))
+
+        if st.session_state.pop("cikis_sifirla_istegi", False):
+            for u, oz, _ in cikis_kalem_listesi:
+                st.session_state[key_olustur("cikis_qty", u, oz)] = 0
+            st.session_state["cikis_aciklama_input"] = ""
+
+        hedef_ilce = st.selectbox("Hedef İlçe", aktif_ilceler, key="toplu_cikis_ilce")
+        st.caption(
+            f"**{hedef_ilce}** ilçesine sevk edilecek adetleri girin veya hızlı butonları kullanın."
+        )
+
+        for urun_adi, ozellik, maks_adet in cikis_kalem_listesi:
+            w_key = key_olustur("cikis_qty", urun_adi, ozellik)
+            if w_key not in st.session_state:
+                st.session_state[w_key] = 0
+            elif st.session_state[w_key] > maks_adet:
+                st.session_state[w_key] = maks_adet
+
+            ilce_mevcut = (
+                int(
+                    df_stok[
+                        (df_stok["Lokasyon"] == hedef_ilce)
+                        & (df_stok["Ürün"] == urun_adi)
+                        & (df_stok["Özellik"] == ozellik)
+                    ]["Mevcut Adet"].sum()
+                )
+                if not df_stok.empty
+                else 0
             )
 
-            secilen_etiket = st.selectbox(
-                "Ürün ve Boyut",
-                sevk_edilebilir["Etiket"].tolist(),
-                key="sepet_urun_secim",
-            )
-            secilen_satir = sevk_edilebilir[sevk_edilebilir["Etiket"] == secilen_etiket].iloc[0]
-            maks_adet = int(secilen_satir["Kalan_Stok"])
-
-            urun_onizleme_karti_goster(
-                secilen_satir["Ürün"],
-                secilen_satir["Özellik"],
-                f"Kalan Stok: {maks_adet:,}",
+            gorsel = urun_gorsel_bilgisi(urun_adi, boyut=22)
+            etiket_baslik = (
+                urun_adi if ozellik in ("", "Standart") else f"{urun_adi} ({ozellik})"
             )
 
-            col_s1, col_s2 = st.columns([2, 1])
-            eklenecek_adet = col_s1.number_input(
-                "Adet",
-                min_value=1,
-                max_value=maks_adet,
-                step=1,
-                value=1,
-                key="sepet_adet_input",
+            col_bilgi, col_input, col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(
+                [3.1, 1.5, 0.85, 0.85, 0.9, 0.95, 0.7]
             )
-            col_s2.write("")
-            col_s2.write("")
-            if col_s2.button("➕ Sepete Ekle", use_container_width=True):
-                mevcut_sepet = st.session_state["cikis_sepeti"]
-                guncellendi = False
-                for item in mevcut_sepet:
-                    if (
-                        item["urun"] == secilen_satir["Ürün"]
-                        and item["ozellik"] == secilen_satir["Özellik"]
-                    ):
-                        item["adet"] += int(eklenecek_adet)
-                        guncellendi = True
-                        break
-                if not guncellendi:
-                    mevcut_sepet.append(
-                        {
-                            "urun": secilen_satir["Ürün"],
-                            "ozellik": secilen_satir["Özellik"],
-                            "adet": int(eklenecek_adet),
-                        }
-                    )
-                st.rerun()
 
-        if st.session_state["cikis_sepeti"]:
-            st.divider()
-            sep_baslik_c1, sep_baslik_c2 = st.columns([4, 1])
-            spekulum_sepet_kalemleri = [
-                x
-                for x in st.session_state["cikis_sepeti"]
-                if x["urun"].strip().lower() == "spekulum"
-            ]
-            sepet_baslik = f"🛒 Sevk Sepeti ({len(st.session_state['cikis_sepeti'])} Kalem)"
-            if len(spekulum_sepet_kalemleri) > 1:
-                spekulum_sepet_toplam = sum(int(x["adet"]) for x in spekulum_sepet_kalemleri)
-                sepet_baslik += f" — Spekulum Toplamı: {spekulum_sepet_toplam:,} Adet"
-
-            sep_baslik_c1.subheader(sepet_baslik)
-            if sep_baslik_c2.button("Temizle", use_container_width=True):
-                st.session_state["cikis_sepeti"] = []
-                st.rerun()
-
-            for idx, item in enumerate(st.session_state["cikis_sepeti"]):
-                gorsel = urun_gorsel_bilgisi(item["urun"], boyut=20)
-                r_c1, r_c2 = st.columns([6, 1])
-                with r_c1:
-                    render_html(
-                        f"""
-                        <div class="cart-row">
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                {gorsel['svg']}
-                                <span><strong>{html.escape(item['urun'])}</strong> — {html.escape(item['ozellik'])}</span>
-                            </div>
-                            <span style="font-weight: 700; color: {gorsel['renk']};">{item['adet']:,} Adet</span>
+            with col_bilgi:
+                render_html(
+                    f"""
+                    <div class="bulk-item-box">
+                        <div class="prod-icon-wrap" style="background: {gorsel['bg']};">
+                            {gorsel['svg']}
                         </div>
-                        """
-                    )
-                with r_c2:
-                    if st.button("Çıkar", key=f"sepet_sil_{idx}", use_container_width=True):
-                        st.session_state["cikis_sepeti"].pop(idx)
-                        st.rerun()
+                        <div>
+                            <div class="bulk-item-title">{html.escape(etiket_baslik)}</div>
+                            <div class="bulk-item-sub">Ana Depo: <strong>{maks_adet:,}</strong> &nbsp;|&nbsp; {html.escape(hedef_ilce)}: <strong>{ilce_mevcut:,}</strong></div>
+                        </div>
+                    </div>
+                    """
+                )
 
-            with st.form("ilce_toplu_cikis_form", clear_on_submit=True):
-                c1, c2 = st.columns([1, 2])
-                hedef_ilce = c1.selectbox("Hedef İlçe", aktif_ilceler)
-                cikis_aciklama = c2.text_input("Açıklama (İsteğe bağlı)")
+            with col_input:
+                st.number_input(
+                    "Adet",
+                    min_value=0,
+                    max_value=maks_adet,
+                    step=1,
+                    key=w_key,
+                    label_visibility="collapsed",
+                )
 
-                if st.form_submit_button("Çıkışı Onayla ve Tutanak Oluştur", type="primary"):
-                    sepet_kopya = [dict(x) for x in st.session_state["cikis_sepeti"]]
+            with col_b1:
+                if st.button("+25", key=f"{w_key}_p25", use_container_width=True):
+                    st.session_state[w_key] = min(maks_adet, st.session_state[w_key] + 25)
+                    st.rerun()
+
+            with col_b2:
+                if st.button("+50", key=f"{w_key}_p50", use_container_width=True):
+                    st.session_state[w_key] = min(maks_adet, st.session_state[w_key] + 50)
+                    st.rerun()
+
+            with col_b3:
+                if st.button("+100", key=f"{w_key}_p100", use_container_width=True):
+                    st.session_state[w_key] = min(maks_adet, st.session_state[w_key] + 100)
+                    st.rerun()
+
+            with col_b4:
+                if st.button("Hepsi", key=f"{w_key}_all", use_container_width=True):
+                    st.session_state[w_key] = maks_adet
+                    st.rerun()
+
+            with col_b5:
+                if st.button("0", key=f"{w_key}_rst", use_container_width=True):
+                    st.session_state[w_key] = 0
+                    st.rerun()
+
+        st.divider()
+        c_alt1, c_alt2 = st.columns([2.5, 1.5])
+        cikis_aciklama = c_alt1.text_input(
+            "Açıklama (İsteğe bağlı)",
+            key="cikis_aciklama_input",
+        )
+
+        toplam_cikilacak_kalem = sum(
+            1
+            for u, oz, _ in cikis_kalem_listesi
+            if st.session_state.get(key_olustur("cikis_qty", u, oz), 0) > 0
+        )
+
+        with c_alt2:
+            st.write("")
+            cikis_buton_etiket = (
+                f"Çıkışı Onayla ve Tutanak Oluştur ({toplam_cikilacak_kalem} Kalem)"
+                if toplam_cikilacak_kalem > 0
+                else "Çıkışı Onayla ve Tutanak Oluştur"
+            )
+            if st.button(
+                cikis_buton_etiket,
+                type="primary",
+                use_container_width=True,
+                key="btn_toplu_cikis",
+            ):
+                cikilacak_kalemler = []
+                for u, oz, _ in cikis_kalem_listesi:
+                    miktar = int(st.session_state.get(key_olustur("cikis_qty", u, oz), 0))
+                    if miktar > 0:
+                        cikilacak_kalemler.append(
+                            {"urun": u, "ozellik": oz, "adet": miktar}
+                        )
+
+                if not cikilacak_kalemler:
+                    st.error("Sevk etmek için en az bir ürüne 0'dan büyük adet girmelisiniz.")
+                else:
                     with st.spinner("Kaydediliyor..."):
-                        eklenen_idler, kayit_zamani = toplu_ilce_cikis_ekle(
+                        eklenen_idler, kayit_zamani = toplu_hareket_ekle(
+                            "ILCE_CIKIS",
                             hedef_ilce,
-                            sepet_kopya,
+                            cikilacak_kalemler,
                             cikis_aciklama,
                         )
                     kayit_no_etiket = (
@@ -1246,17 +1380,18 @@ with sekme_cikis:
                         if len(eklenen_idler) == 1
                         else f"{eklenen_idler[0]} - {eklenen_idler[-1]}"
                     )
-
                     st.session_state["son_cikis_tutanak"] = {
                         "kayit_no": kayit_no_etiket,
                         "tarih_saat": kayit_zamani,
                         "islem_turu": "ILCE_CIKIS",
                         "lokasyon": hedef_ilce,
-                        "kalemler": sepet_kopya,
+                        "kalemler": cikilacak_kalemler,
                         "aciklama": cikis_aciklama,
                     }
-                    st.session_state["cikis_sepeti"] = []
-                    st.success(f"{hedef_ilce} ilçesine {len(sepet_kopya)} kalem ürün çıkışı yapıldı.")
+                    st.session_state["cikis_sifirla_istegi"] = True
+                    st.success(
+                        f"{hedef_ilce} ilçesine {len(cikilacak_kalemler)} kalem ürün çıkışı yapıldı."
+                    )
                     st.rerun()
 
     if "son_cikis_tutanak" in st.session_state:
