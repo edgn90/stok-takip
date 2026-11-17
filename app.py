@@ -987,6 +987,18 @@ def key_olustur(on_ek: str, urun: str, ozellik: str) -> str:
     return f"{on_ek}_{temiz}"
 
 
+def adet_artir_cb(state_key: str, artis: int, maks_deger: int | None = None):
+    mevcut = int(st.session_state.get(state_key, 0))
+    yeni = mevcut + artis
+    if maks_deger is not None:
+        yeni = min(maks_deger, yeni)
+    st.session_state[state_key] = yeni
+
+
+def adet_ayarla_cb(state_key: str, hedef_deger: int):
+    st.session_state[state_key] = int(hedef_deger)
+
+
 # --- UYGULAMA ARAYÜZÜ ---
 stil_uygula()
 
@@ -1051,7 +1063,6 @@ with sekme_durum:
 
 # 2. SEKME: İL ANA DEPOYA TOPLU GİRİŞ + HIZLI ADET BUTONLARI
 with sekme_giris:
-    # Mevcut ekstra ürünler varsa onları da listeye dahil et
     giris_kalem_listesi = list(STANDART_KALEMLER)
     if not df_stok.empty:
         for _, r in df_stok[["Ürün", "Özellik"]].drop_duplicates().iterrows():
@@ -1059,7 +1070,6 @@ with sekme_giris:
             if cift not in giris_kalem_listesi:
                 giris_kalem_listesi.append(cift)
 
-    # Gönderim sonrası sıfırlama bayrağı
     if st.session_state.pop("giris_sifirla_istegi", False):
         for urun_adi, ozellik in giris_kalem_listesi:
             st.session_state[key_olustur("giris_qty", urun_adi, ozellik)] = 0
@@ -1121,24 +1131,40 @@ with sekme_giris:
             )
 
         with col_b1:
-            if st.button("+50", key=f"{w_key}_p50", use_container_width=True):
-                st.session_state[w_key] += 50
-                st.rerun()
+            st.button(
+                "+50",
+                key=f"{w_key}_p50",
+                use_container_width=True,
+                on_click=adet_artir_cb,
+                args=(w_key, 50, None),
+            )
 
         with col_b2:
-            if st.button("+100", key=f"{w_key}_p100", use_container_width=True):
-                st.session_state[w_key] += 100
-                st.rerun()
+            st.button(
+                "+100",
+                key=f"{w_key}_p100",
+                use_container_width=True,
+                on_click=adet_artir_cb,
+                args=(w_key, 100, None),
+            )
 
         with col_b3:
-            if st.button("+500", key=f"{w_key}_p500", use_container_width=True):
-                st.session_state[w_key] += 500
-                st.rerun()
+            st.button(
+                "+500",
+                key=f"{w_key}_p500",
+                use_container_width=True,
+                on_click=adet_artir_cb,
+                args=(w_key, 500, None),
+            )
 
         with col_b4:
-            if st.button("0", key=f"{w_key}_rst", use_container_width=True):
-                st.session_state[w_key] = 0
-                st.rerun()
+            st.button(
+                "0",
+                key=f"{w_key}_rst",
+                use_container_width=True,
+                on_click=adet_ayarla_cb,
+                args=(w_key, 0),
+            )
 
     with st.expander("➕ Listede Olmayan Yeni Ürün Ekle"):
         ny_c1, ny_c2, ny_c3 = st.columns([2, 1.5, 1])
@@ -1229,7 +1255,6 @@ with sekme_cikis:
     if ana_depo_stok.empty:
         st.warning("İl Ana Depoda sevk edilebilecek stok bulunmuyor.")
     else:
-        # Standart sırayı koruyarak mevcut stoklu kalemleri sırala
         mevcut_harita = {
             (r["Ürün"], r["Özellik"]): int(r["Mevcut Adet"])
             for _, r in ana_depo_stok.iterrows()
@@ -1307,29 +1332,49 @@ with sekme_cikis:
                 )
 
             with col_b1:
-                if st.button("+25", key=f"{w_key}_p25", use_container_width=True):
-                    st.session_state[w_key] = min(maks_adet, st.session_state[w_key] + 25)
-                    st.rerun()
+                st.button(
+                    "+25",
+                    key=f"{w_key}_p25",
+                    use_container_width=True,
+                    on_click=adet_artir_cb,
+                    args=(w_key, 25, maks_adet),
+                )
 
             with col_b2:
-                if st.button("+50", key=f"{w_key}_p50", use_container_width=True):
-                    st.session_state[w_key] = min(maks_adet, st.session_state[w_key] + 50)
-                    st.rerun()
+                st.button(
+                    "+50",
+                    key=f"{w_key}_p50",
+                    use_container_width=True,
+                    on_click=adet_artir_cb,
+                    args=(w_key, 50, maks_adet),
+                )
 
             with col_b3:
-                if st.button("+100", key=f"{w_key}_p100", use_container_width=True):
-                    st.session_state[w_key] = min(maks_adet, st.session_state[w_key] + 100)
-                    st.rerun()
+                st.button(
+                    "+100",
+                    key=f"{w_key}_p100",
+                    use_container_width=True,
+                    on_click=adet_artir_cb,
+                    args=(w_key, 100, maks_adet),
+                )
 
             with col_b4:
-                if st.button("Hepsi", key=f"{w_key}_all", use_container_width=True):
-                    st.session_state[w_key] = maks_adet
-                    st.rerun()
+                st.button(
+                    "Hepsi",
+                    key=f"{w_key}_all",
+                    use_container_width=True,
+                    on_click=adet_ayarla_cb,
+                    args=(w_key, maks_adet),
+                )
 
             with col_b5:
-                if st.button("0", key=f"{w_key}_rst", use_container_width=True):
-                    st.session_state[w_key] = 0
-                    st.rerun()
+                st.button(
+                    "0",
+                    key=f"{w_key}_rst",
+                    use_container_width=True,
+                    on_click=adet_ayarla_cb,
+                    args=(w_key, 0),
+                )
 
         st.divider()
         c_alt1, c_alt2 = st.columns([2.5, 1.5])
